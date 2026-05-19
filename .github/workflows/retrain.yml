@@ -5,6 +5,9 @@ on:
     - cron: "0 18 * * 0"  # 毎週月曜 3:00 JST（UTC 18:00 日曜）
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   retrain:
     runs-on: ubuntu-latest
