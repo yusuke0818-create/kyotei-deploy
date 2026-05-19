@@ -376,19 +376,30 @@ def get_odds_3f(venue_code: str, race_no: int, date_str: str) -> dict[str, float
 
 
 def get_today_schedule() -> list[dict]:
-    """本日の開催場一覧を返す。[{"venue_code": "01", "venue_name": "桐生"}, ...]"""
+    """本日の開催場一覧と現在/次レース番号を返す。
+    [{"venue_code": "01", "venue_name": "桐生", "current_race": 5}, ...]
+    current_race: インデックスページの会場リンクから抽出したレース番号。
+                  取得できない場合は None（GUIでは全レース有効扱い）。
+    """
     url = f"{BASE_URL}/owpc/pc/race/index"
     soup = _fetch(url)
     if soup is None:
         return []
 
     schedule = []
+    seen: set[str] = set()
     for a in soup.find_all("a", href=True):
-        m = re.search(r"jcd=(\d{2})", a["href"])
-        if m:
-            code = m.group(1)
-            name = VENUE_NAMES.get(code, code)
-            if not any(s["venue_code"] == code for s in schedule):
-                schedule.append({"venue_code": code, "venue_name": name})
+        href = a["href"]
+        m = re.search(r"jcd=(\d{2})", href)
+        if not m:
+            continue
+        code = m.group(1)
+        if code in seen:
+            continue
+        seen.add(code)
+        name = VENUE_NAMES.get(code, code)
+        rno_match = re.search(r"rno=(\d+)", href)
+        current_race = int(rno_match.group(1)) if rno_match else None
+        schedule.append({"venue_code": code, "venue_name": name, "current_race": current_race})
 
     return schedule

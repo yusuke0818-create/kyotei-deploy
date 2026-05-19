@@ -22,6 +22,9 @@ C_ERROR   = "#FF6B6B"
 C_SUCCESS = "#4CAF50"
 C_WARN    = "#FFA726"
 C_TITLE   = "#C8960C"  # ツール名ゴールド（ロト6と共通）
+C_DIS_BG   = "#0A1220"
+C_DIS_TEXT = "#3A4A5A"
+C_DIS_SIDE = "#1A2A3A"
 
 # 公式艇番カラー
 BOAT_COLORS = {
@@ -267,6 +270,7 @@ def build_top_screen(page: ft.Page) -> None:
         "race_no": None,
         "venue_btn": {},
         "race_btn": {},
+        "schedule": {},  # venue_code -> {venue_code, venue_name, current_race}
     }
 
     # ヘッダー
@@ -297,6 +301,7 @@ def build_top_screen(page: ft.Page) -> None:
         state["venue_btn"][code] = btn
 
         def on_click(e, c=code, n=name):
+            state["race_no"] = None
             for k, b in state["venue_btn"].items():
                 b.style = ft.ButtonStyle(
                     color="#FFFFFF" if k == c else C_SUB,
@@ -308,6 +313,7 @@ def build_top_screen(page: ft.Page) -> None:
                 b.update()
             state["venue_code"] = c
             state["venue_name"] = n
+            _apply_race_schedule(c)
 
         btn.on_click = on_click
         return btn
@@ -427,6 +433,65 @@ def build_top_screen(page: ft.Page) -> None:
         threading.Thread(target=_run, daemon=True).start()
 
     fetch_btn.on_click = on_fetch
+
+    # ── スケジュール非活性化ヘルパー ──────────────────────────────
+    def _apply_venue_schedule() -> None:
+        """本日非開催の会場ボタンを非活性化する。"""
+        active = set(state["schedule"].keys())
+        for code, btn in state["venue_btn"].items():
+            if code not in active:
+                btn.style = ft.ButtonStyle(
+                    color=C_DIS_TEXT, bgcolor=C_DIS_BG,
+                    side={"": ft.BorderSide(1, C_DIS_SIDE)},
+                    padding=_pad(h=4, v=4),
+                    shape=ft.RoundedRectangleBorder(radius=6),
+                )
+                btn.disabled = True
+                btn.update()
+        page.update()
+
+    def _apply_race_schedule(vc: str) -> None:
+        """終了済みレースボタンを非活性化する。スケジュール未取得時は全レース有効。"""
+        current = state["schedule"].get(vc, {}).get("current_race")
+        selected = state["race_no"]
+        for rno, btn in state["race_btn"].items():
+            ended = current is not None and rno < current
+            if ended:
+                btn.style = ft.ButtonStyle(
+                    color=C_DIS_TEXT, bgcolor=C_DIS_BG,
+                    side={"": ft.BorderSide(1, C_DIS_SIDE)},
+                    padding=_pad(h=4, v=4),
+                    shape=ft.RoundedRectangleBorder(radius=6),
+                )
+                btn.disabled = True
+                if state["race_no"] == rno:
+                    state["race_no"] = None
+            elif rno == selected:
+                btn.style = ft.ButtonStyle(
+                    color="#FFFFFF", bgcolor=C_ACCENT,
+                    side={"": ft.BorderSide(1, C_ACCENT)},
+                    padding=_pad(h=4, v=4),
+                    shape=ft.RoundedRectangleBorder(radius=6),
+                )
+                btn.disabled = False
+            else:
+                btn.style = ft.ButtonStyle(
+                    color=C_SUB, bgcolor="transparent",
+                    side={"": ft.BorderSide(1, C_BORDER)},
+                    padding=_pad(h=4, v=4),
+                    shape=ft.RoundedRectangleBorder(radius=6),
+                )
+                btn.disabled = False
+            btn.update()
+        page.update()
+
+    def _load_schedule() -> None:
+        state["schedule"] = {s["venue_code"]: s for s in scraper.get_today_schedule()}
+        _apply_venue_schedule()
+        if state["venue_code"]:
+            _apply_race_schedule(state["venue_code"])
+
+    threading.Thread(target=_load_schedule, daemon=True).start()
 
     # ── ページ組み立て ─────────────────────────────────────────
     page.controls.clear()
