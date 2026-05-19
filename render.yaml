@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: kyotei-tool
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main_web.py
+    envVars:
+      - key: RENDER
+        value: true
