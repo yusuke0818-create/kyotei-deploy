@@ -171,15 +171,16 @@ def collect_incremental(days: int = 14) -> int:
     else:
         df_new.to_csv(TRAINING_CSV, index=False)
 
-    # ローリングウィンドウ: 古いデータを削除
+    # ローリングウィンドウ: 古いデータを削除 ＋ 重複除去（PC/Actions並行収集の競合対策）
     cutoff = (date.today() - timedelta(days=ROLLING_DAYS)).strftime("%Y%m%d")
     df_all = pd.read_csv(TRAINING_CSV)
     before = len(df_all)
     df_all = df_all[df_all["date"].astype(str) >= cutoff]
+    df_all = df_all.drop_duplicates()
     df_all.to_csv(TRAINING_CSV, index=False)
     removed = before - len(df_all)
 
-    print(f"追記: {len(df_new)}件  削除（2年超）: {removed}件  合計: {len(df_all)}件")
+    print(f"追記: {len(df_new)}件  削除（2年超＋重複）: {removed}件  合計: {len(df_all)}件")
     return len(df_new)
 
 
