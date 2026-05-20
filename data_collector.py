@@ -15,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 
 import scraper
+from constants import GRADE_MAP, NIGHT_VENUES
 
 BASE_URL = "https://www.boatrace.jp"
 HEADERS = {"User-Agent": "kyotei-yosou-tool/1.0 (contact: yusuke0818@gmail.com)"}
@@ -29,9 +30,6 @@ VENUE_CODES = [
     "17", "18", "19", "20", "21", "22", "23", "24",
 ]
 
-GRADE_MAP = {"A1": 4, "A2": 3, "B1": 2, "B2": 1}
-NIGHT_VENUES = {"01", "04", "12", "13", "15", "16", "21", "22", "23", "24"}
-
 
 def _is_night_race(venue_code: str, race_no: int) -> int:
     return 1 if venue_code in NIGHT_VENUES and race_no >= 9 else 0
@@ -43,7 +41,8 @@ def _fetch(url: str) -> BeautifulSoup | None:
         resp = requests.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
-    except Exception:
+    except Exception as e:
+        print(f"[WARN] fetch failed: {url} → {e}")
         return None
 
 

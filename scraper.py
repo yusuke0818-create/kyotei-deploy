@@ -33,7 +33,8 @@ def _fetch(url: str) -> BeautifulSoup | None:
         resp = requests.get(url, headers=HEADERS, timeout=30)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
-    except Exception:
+    except Exception as e:
+        print(f"[WARN] fetch failed: {url} → {e}")
         return None
 
 
@@ -109,7 +110,7 @@ def get_race_entries(venue_code: str, race_no: int, date_str: str) -> list[dict]
                 if p.strip()
             ]
             fly_count = 0
-            st_avg = 0.20
+            st_avg = None  # 取得失敗時はNaN → モデルが欠損として処理する
             for p in fls_parts:
                 if p.startswith("F") and p[1:].isdigit():
                     fly_count = int(p[1:])

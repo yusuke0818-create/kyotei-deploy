@@ -100,6 +100,7 @@ def train() -> float:
         subsample=0.8,
         colsample_bytree=0.8,
         eval_metric="logloss",
+        n_jobs=-1,
         random_state=42,
     )
     model.fit(X_train, y_train)

@@ -6,12 +6,8 @@
 import numpy as np
 import pandas as pd
 
+from constants import GRADE_MAP, NIGHT_VENUES
 from model import FEATURES, load_model, predict_proba
-
-GRADE_MAP = {"A1": 4, "A2": 3, "B1": 2, "B2": 1}
-
-# ナイター開催場コード（data_collectorと同じ定義）
-NIGHT_VENUES = {"01", "04", "12", "13", "15", "16", "21", "22", "23", "24"}
 
 _model = None
 _accuracy = None

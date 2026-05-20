@@ -36,14 +36,8 @@ BOAT_COLORS = {
     6: {"bg": "#008000", "text": "#FFFFFF"},
 }
 
-VENUE_LIST = [
-    ("桐生", "01"), ("戸田", "02"), ("江戸川", "03"), ("平和島", "04"),
-    ("多摩川", "05"), ("浜名湖", "06"), ("蒲郡", "07"), ("常滑", "08"),
-    ("津",   "09"), ("三国",  "10"), ("びわこ", "11"), ("住之江", "12"),
-    ("尼崎", "13"), ("鳴門",  "14"), ("丸亀",  "15"), ("児島",  "16"),
-    ("宮島", "17"), ("徳山",  "18"), ("下関",  "19"), ("若松",  "20"),
-    ("芦屋", "21"), ("福岡",  "22"), ("からつ", "23"), ("大村",  "24"),
-]
+# scraper.VENUE_CODES（name→code dict）から順序を保って生成
+VENUE_LIST: list[tuple[str, str]] = list(scraper.VENUE_CODES.items())
 
 
 # ── ヘルパー関数 ────────────────────────────────────────────────
@@ -382,22 +376,29 @@ def build_top_screen(page: ft.Page) -> None:
         width=300,
     )
 
+    # UI更新をスレッドから安全に行うためのロック
+    _fetch_lock = threading.Lock()
+
+    def _update_ui(msg_text: str, msg_color: str, btn_disabled: bool) -> None:
+        """バックグラウンドスレッドからのUI更新を一元化する。"""
+        with _fetch_lock:
+            msg.value = msg_text
+            msg.color = msg_color
+            fetch_btn.disabled = btn_disabled
+            try:
+                page.update()
+            except Exception:
+                pass  # セッション切断時など更新失敗は無視
+
     def on_fetch(e):
         if not state["venue_code"]:
-            msg.value = "会場を選択してください"
-            msg.color = C_ERROR
-            page.update()
+            _update_ui("会場を選択してください", C_ERROR, False)
             return
         if not state["race_no"]:
-            msg.value = "レース番号を選択してください"
-            msg.color = C_ERROR
-            page.update()
+            _update_ui("レース番号を選択してください", C_ERROR, False)
             return
 
-        msg.value = "データ取得中... しばらくお待ちください"
-        msg.color = C_WARN
-        fetch_btn.disabled = True
-        page.update()
+        _update_ui("データ取得中... しばらくお待ちください", C_WARN, True)
 
         def _run():
             try:
@@ -408,16 +409,13 @@ def build_top_screen(page: ft.Page) -> None:
 
                 entries = scraper.get_race_entries(vc, rno, today)
                 if not entries:
-                    msg.value = "出走情報を取得できませんでした（E001）"
-                    msg.color = C_ERROR
-                    fetch_btn.disabled = False
-                    page.update()
+                    _update_ui("出走情報を取得できませんでした（E001）", C_ERROR, False)
                     return
 
                 before_info = scraper.get_before_info(vc, rno, today)
-                odds = scraper.get_odds(vc, rno, today)
-                odds_2f = scraper.get_odds_2f(vc, rno, today)
-                odds_3f = scraper.get_odds_3f(vc, rno, today)
+                odds      = scraper.get_odds(vc, rno, today)
+                odds_2f   = scraper.get_odds_2f(vc, rno, today)
+                odds_3f   = scraper.get_odds_3f(vc, rno, today)
 
                 result = predictor.predict(
                     entries, before_info, odds, odds_2f, odds_3f,
@@ -429,10 +427,7 @@ def build_top_screen(page: ft.Page) -> None:
                 build_result_screen(page, result)
 
             except Exception as ex:
-                msg.value = f"エラーが発生しました: {ex}"
-                msg.color = C_ERROR
-                fetch_btn.disabled = False
-                page.update()
+                _update_ui(f"エラーが発生しました: {ex}", C_ERROR, False)
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -453,7 +448,6 @@ def build_top_screen(page: ft.Page) -> None:
                     shape=ft.RoundedRectangleBorder(radius=6),
                 )
                 btn.disabled = True
-                btn.update()
         page.update()
 
     def _apply_race_schedule(vc: str) -> None:
@@ -488,7 +482,6 @@ def build_top_screen(page: ft.Page) -> None:
                     shape=ft.RoundedRectangleBorder(radius=6),
                 )
                 btn.disabled = False
-            btn.update()
         page.update()
 
     def _load_schedule() -> None:
