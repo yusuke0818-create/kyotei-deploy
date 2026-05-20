@@ -390,8 +390,10 @@ def get_today_schedule() -> list[dict]:
     if soup is None:
         return []
 
-    # venue_code -> current_race（rno= のないリンクが先に来ても後から上書き可能）
+    # venue_code -> 最初に見つかったrno（current_race候補）
     active: dict[str, int | None] = {}
+    # venue_code -> 結果ページが存在するrnoの集合（終了済みレースの検出用）
+    finished: dict[str, set[int]] = {}
 
     for a in soup.find_all("a", href=True):
         href = a["href"]
@@ -404,20 +406,21 @@ def get_today_schedule() -> list[dict]:
             continue
         code = m.group(1)
         rno_match = re.search(r"rno=(\d+)", href)
-        # 結果ページリンクはそのレースが終了済み → current_race = rno + 1
-        is_result = "raceresult" in href
+
+        # raceresult リンクはそのレースが終了済みとして記録する
+        if "raceresult" in href and rno_match:
+            finished.setdefault(code, set()).add(int(rno_match.group(1)))
+
         if code not in active:
-            if rno_match:
-                rno_val = int(rno_match.group(1))
-                active[code] = rno_val + 1 if is_result else rno_val
-            else:
-                active[code] = None
+            active[code] = int(rno_match.group(1)) if rno_match else None
         elif active[code] is None and rno_match:
             # rno= のないリンクで登録済みの場合、rno= 付きリンクで current_race を更新
-            rno_val = int(rno_match.group(1))
-            active[code] = rno_val + 1 if is_result else rno_val
+            active[code] = int(rno_match.group(1))
 
-    return [
-        {"venue_code": code, "venue_name": VENUE_NAMES.get(code, code), "current_race": cr}
-        for code, cr in active.items()
-    ]
+    result = []
+    for code, cr in active.items():
+        # current_race のレースに結果が存在する場合、そのレースは終了済み → cr + 1
+        if cr is not None and cr in finished.get(code, set()):
+            cr = cr + 1
+        result.append({"venue_code": code, "venue_name": VENUE_NAMES.get(code, code), "current_race": cr})
+    return result
