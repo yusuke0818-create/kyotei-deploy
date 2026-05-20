@@ -303,6 +303,8 @@ def build_top_screen(page: ft.Page) -> None:
         def on_click(e, c=code, n=name):
             state["race_no"] = None
             for k, b in state["venue_btn"].items():
+                if b.disabled:
+                    continue
                 b.style = ft.ButtonStyle(
                     color="#FFFFFF" if k == c else C_SUB,
                     bgcolor=C_ACCENT if k == c else "transparent",
@@ -342,6 +344,8 @@ def build_top_screen(page: ft.Page) -> None:
 
         def on_click(e, r=rno):
             for k, b in state["race_btn"].items():
+                if b.disabled:
+                    continue
                 b.style = ft.ButtonStyle(
                     color="#FFFFFF" if k == r else C_SUB,
                     bgcolor=C_ACCENT if k == r else "transparent",
@@ -437,6 +441,8 @@ def build_top_screen(page: ft.Page) -> None:
     # ── スケジュール非活性化ヘルパー ──────────────────────────────
     def _apply_venue_schedule() -> None:
         """本日非開催の会場ボタンを非活性化する。"""
+        if not state["schedule"]:
+            return  # 取得失敗時は全会場を有効のまま維持
         active = set(state["schedule"].keys())
         for code, btn in state["venue_btn"].items():
             if code not in active:
@@ -491,8 +497,6 @@ def build_top_screen(page: ft.Page) -> None:
         if state["venue_code"]:
             _apply_race_schedule(state["venue_code"])
 
-    threading.Thread(target=_load_schedule, daemon=True).start()
-
     # ── ページ組み立て ─────────────────────────────────────────
     page.controls.clear()
     page.add(
@@ -514,3 +518,6 @@ def build_top_screen(page: ft.Page) -> None:
         ),
     )
     page.update()
+
+    # ページ描画後にスケジュール取得を開始
+    threading.Thread(target=_load_schedule, daemon=True).start()
