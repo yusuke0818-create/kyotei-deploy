@@ -55,7 +55,11 @@ def train() -> float:
     X = df[FEATURES]
     y = df["is_first"]
 
-    # 直近1年をテスト・それ以前を学習データとして分割
+    # 直近1年をテスト・それ以前を学習データとして時系列分割
+    df = df.reset_index(drop=True)
+    X = df[FEATURES]
+    y = df["is_first"]
+
     if "date" in df.columns:
         df_dates = df["date"].astype(str)
         cutoff = df_dates.max()
@@ -68,19 +72,26 @@ def train() -> float:
             cutoff_1y_date = cutoff_date.replace(year=cutoff_date.year - 1, day=28)
         cutoff_1y = cutoff_1y_date.strftime("%Y%m%d")
         mask_test = df_dates >= cutoff_1y
-        if mask_test.sum() > 0:
+        # 学習データとテストデータ両方に十分なデータがある場合のみ時系列分割
+        if mask_test.sum() > 0 and (~mask_test).sum() > 0:
             X_train, y_train = X[~mask_test], y[~mask_test]
-            X_test, y_test = X[mask_test], y[mask_test]
+            X_test,  y_test  = X[mask_test],  y[mask_test]
+            df_test = df[mask_test].copy()
         else:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42
+            # データが少なく時系列分割できない場合はランダム分割（水増しを防ぐ）
+            idx_train, idx_test = train_test_split(
+                df.index, test_size=0.2, random_state=42
             )
-        df_test = df[mask_test].copy() if mask_test.sum() > 0 else df.copy()
+            X_train, y_train = X.loc[idx_train], y.loc[idx_train]
+            X_test,  y_test  = X.loc[idx_test],  y.loc[idx_test]
+            df_test = df.loc[idx_test].copy()
     else:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
+        idx_train, idx_test = train_test_split(
+            df.index, test_size=0.2, random_state=42
         )
-        df_test = df.copy()
+        X_train, y_train = X.loc[idx_train], y.loc[idx_train]
+        X_test,  y_test  = X.loc[idx_test],  y.loc[idx_test]
+        df_test = df.loc[idx_test].copy()
 
     model = XGBClassifier(
         n_estimators=300,

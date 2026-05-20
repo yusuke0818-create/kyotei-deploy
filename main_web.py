@@ -16,15 +16,14 @@ def main(page: ft.Page) -> None:
     page.bgcolor = "#0A1628"
     page.padding = ft.Padding(left=12, right=12, top=0, bottom=0)
     page.scroll = ft.ScrollMode.AUTO
-
-    # モデルを起動時に1回だけロード
-    try:
-        predictor.initialize()
-    except FileNotFoundError:
-        pass  # モデル未生成時はエラーにしない（GUI側でハンドリング）
-
     gui.build_top_screen(page)
 
+
+# モデルをプロセス起動時に1回だけロード（接続ごとに呼ばれる main() の外に置く）
+try:
+    predictor.initialize()
+except FileNotFoundError:
+    pass  # モデル未生成時はエラーにしない（GUI側でハンドリング）
 
 ft.run(
     main,

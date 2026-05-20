@@ -183,8 +183,13 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
         current += timedelta(days=1)
 
     if not all_records:
-        print("収集レコードなし")
-        # 進捗は更新しない（収集できなかった日付をスキップしないため）
+        print("収集レコードなし（非開催日または取得失敗）")
+        # 非開催日・取得失敗でも進捗を進める（同じ日付を永遠に再試行しないため）
+        if reverse:
+            state["reverse_min"] = start_date.strftime("%Y%m%d")
+        else:
+            state["forward_max"] = end_date.strftime("%Y%m%d")
+        _save_state(state)
         return 0
 
     df_new = pd.DataFrame(all_records)
@@ -195,11 +200,14 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
     else:
         df_new.to_csv(TRAINING_CSV, index=False)
 
-    # ローリングウィンドウ: 古いデータを削除
+    # ローリングウィンドウ: 古いデータを削除 + 重複除去（同時書き込み競合の安全策）
     cutoff = (today - timedelta(days=ROLLING_DAYS)).strftime("%Y%m%d")
     df_all = pd.read_csv(TRAINING_CSV)
     before = len(df_all)
     df_all = df_all[df_all["date"].astype(str) >= cutoff]
+    df_all = df_all.drop_duplicates(
+        subset=["date", "venue_code", "race_no", "boat_no"]
+    )
     df_all.to_csv(TRAINING_CSV, index=False)
     removed = before - len(df_all)
 

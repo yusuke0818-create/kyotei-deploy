@@ -34,7 +34,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 変更確認
-$changed = git status --porcelain data/training_data.csv data/model.pkl
+$changed = git status --porcelain data/training_data.csv data/model.pkl data/collection_state.json
 if (-not $changed) {
     Log "[3/4] 新規データなし。コミットをスキップします。"
     Log "===== 終了 ====="

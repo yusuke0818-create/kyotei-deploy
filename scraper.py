@@ -294,7 +294,7 @@ def get_odds(venue_code: str, race_no: int, date_str: str) -> dict[str, float]:
                     odds[str(boat_no)] = odds_val
             except (ValueError, IndexError):
                 continue
-        if len(odds) >= 1:
+        if len(odds) >= 6:
             break
 
     return odds
