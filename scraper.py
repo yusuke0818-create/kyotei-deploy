@@ -381,6 +381,9 @@ def get_today_schedule() -> list[dict]:
     current_race: インデックスページの会場リンクから抽出したレース番号。
                   取得できない場合は None（GUIでは全レース有効扱い）。
     """
+    from datetime import date as _date
+    today_str = _date.today().strftime("%Y%m%d")
+
     url = f"{BASE_URL}/owpc/pc/race/index"
     soup = _fetch(url)
     if soup is None:
@@ -390,6 +393,10 @@ def get_today_schedule() -> list[dict]:
     seen: set[str] = set()
     for a in soup.find_all("a", href=True):
         href = a["href"]
+        # 昨日以前のリンク（hd=YYYYMMDD が今日と異なる）は除外する
+        hd_match = re.search(r"hd=(\d{8})", href)
+        if hd_match and hd_match.group(1) != today_str:
+            continue
         m = re.search(r"jcd=(\d{2})", href)
         if not m:
             continue
