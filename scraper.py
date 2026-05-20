@@ -389,8 +389,9 @@ def get_today_schedule() -> list[dict]:
     if soup is None:
         return []
 
-    schedule = []
-    seen: set[str] = set()
+    # venue_code -> current_race（rno= のないリンクが先に来ても後から上書き可能）
+    active: dict[str, int | None] = {}
+
     for a in soup.find_all("a", href=True):
         href = a["href"]
         # 昨日以前のリンク（hd=YYYYMMDD が今日と異なる）は除外する
@@ -401,12 +402,14 @@ def get_today_schedule() -> list[dict]:
         if not m:
             continue
         code = m.group(1)
-        if code in seen:
-            continue
-        seen.add(code)
-        name = VENUE_NAMES.get(code, code)
         rno_match = re.search(r"rno=(\d+)", href)
-        current_race = int(rno_match.group(1)) if rno_match else None
-        schedule.append({"venue_code": code, "venue_name": name, "current_race": current_race})
+        if code not in active:
+            active[code] = int(rno_match.group(1)) if rno_match else None
+        elif active[code] is None and rno_match:
+            # rno= のないリンクで登録済みの場合、rno= 付きリンクで current_race を更新
+            active[code] = int(rno_match.group(1))
 
-    return schedule
+    return [
+        {"venue_code": code, "venue_name": VENUE_NAMES.get(code, code), "current_race": cr}
+        for code, cr in active.items()
+    ]
