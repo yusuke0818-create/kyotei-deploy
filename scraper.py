@@ -404,11 +404,18 @@ def get_today_schedule() -> list[dict]:
             continue
         code = m.group(1)
         rno_match = re.search(r"rno=(\d+)", href)
+        # 結果ページリンクはそのレースが終了済み → current_race = rno + 1
+        is_result = "raceresult" in href
         if code not in active:
-            active[code] = int(rno_match.group(1)) if rno_match else None
+            if rno_match:
+                rno_val = int(rno_match.group(1))
+                active[code] = rno_val + 1 if is_result else rno_val
+            else:
+                active[code] = None
         elif active[code] is None and rno_match:
             # rno= のないリンクで登録済みの場合、rno= 付きリンクで current_race を更新
-            active[code] = int(rno_match.group(1))
+            rno_val = int(rno_match.group(1))
+            active[code] = rno_val + 1 if is_result else rno_val
 
     return [
         {"venue_code": code, "venue_name": VENUE_NAMES.get(code, code), "current_race": cr}
