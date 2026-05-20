@@ -1,8 +1,8 @@
-name: 週次モデル再学習（定常運用）
+name: 日次データ収集＋モデル再学習（定常運用）
 
 on:
   schedule:
-    - cron: "0 18 * * 0"  # 毎週月曜 3:00 JST（UTC 18:00 日曜）
+    - cron: "0 15 * * *"  # 毎日 0:00 JST（UTC 15:00）
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   retrain:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60  # 1日分 ≈ 26分なので余裕あり
 
     steps:
       - name: リポジトリをチェックアウト
@@ -25,8 +25,8 @@ jobs:
       - name: 依存ライブラリをインストール
         run: pip install -r requirements.txt
 
-      - name: 直近7日分を収集
-        run: python data_collector.py --days 7
+      - name: 前日分データを収集
+        run: python data_collector.py --days 1
 
       - name: モデル再学習
         run: python model.py
@@ -36,5 +36,5 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/training_data.csv data/model.pkl
-          git diff --staged --quiet || git commit -m "chore: 週次モデル再学習 $(date '+%Y-%m-%d')"
+          git diff --staged --quiet || git commit -m "chore: 日次更新 $(date '+%Y-%m-%d')"
           git push
