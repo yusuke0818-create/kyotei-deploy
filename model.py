@@ -46,17 +46,14 @@ def train() -> float:
     df = pd.read_csv(TRAINING_CSV)
     # is_firstがNaNの行のみ除外。特徴量のNaNはXGBoostがネイティブ処理する
     df = df.dropna(subset=["is_first"])
+    df = df.reset_index(drop=True)
 
     # FEATURES列が存在しない場合はNaNで補完（旧データとの互換性）
     for col in FEATURES:
         if col not in df.columns:
             df[col] = np.nan
 
-    X = df[FEATURES]
-    y = df["is_first"]
-
     # 直近1年をテスト・それ以前を学習データとして時系列分割
-    df = df.reset_index(drop=True)
     X = df[FEATURES]
     y = df["is_first"]
 

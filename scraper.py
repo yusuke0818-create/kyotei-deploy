@@ -175,7 +175,7 @@ def get_race_entries(venue_code: str, race_no: int, date_str: str) -> list[dict]
                 "national_2rate": None,
                 "local_win_rate": None,
                 "local_2rate": None,
-                "st_avg": 0.20,
+                "st_avg": None,
                 "fly_count": 0,
                 "motor_no": 0,
                 "motor_rate": None,

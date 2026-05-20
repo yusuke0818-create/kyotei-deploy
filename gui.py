@@ -448,7 +448,10 @@ def build_top_screen(page: ft.Page) -> None:
                     shape=ft.RoundedRectangleBorder(radius=6),
                 )
                 btn.disabled = True
-        page.update()
+        try:
+            page.update()
+        except Exception:
+            pass
 
     def _apply_race_schedule(vc: str) -> None:
         """終了済みレースボタンを非活性化する。スケジュール未取得時は全レース有効。"""
@@ -482,7 +485,10 @@ def build_top_screen(page: ft.Page) -> None:
                     shape=ft.RoundedRectangleBorder(radius=6),
                 )
                 btn.disabled = False
-        page.update()
+        try:
+            page.update()
+        except Exception:
+            pass
 
     def _load_schedule() -> None:
         state["schedule"] = {s["venue_code"]: s for s in scraper.get_today_schedule()}
