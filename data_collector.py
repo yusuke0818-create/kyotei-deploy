@@ -121,33 +121,44 @@ def collect_one_day(target_date: date) -> list[dict]:
     return records
 
 
-def collect_incremental(days: int = 14) -> int:
+def collect_incremental(days: int = 14, reverse: bool = False) -> int:
     """
-    前回の最終収集日の翌日から指定日数分を収集してCSVに追記する。
-    古いデータは ROLLING_DAYS 日より古いものを自動削除する。
+    インクリメンタル収集。
+    reverse=False（GitHub Actions用）: 最古の未収集日から新しい方向へ収集
+    reverse=True （PC夜間収集用）  : 最新の未収集日から古い方向へ収集
+    両端から収集することで重複なしに効率よく5年分を埋める。
     返り値: 追記したレコード数
     """
     os.makedirs("data", exist_ok=True)
+    today = date.today()
+    oldest = date(today.year - 5, today.month, today.day)
 
-    # 前回の最終収集日を特定
-    if os.path.exists(TRAINING_CSV):
-        df_existing = pd.read_csv(TRAINING_CSV, usecols=["date"])
-        last_date_str = str(int(df_existing["date"].max()))
-        last_date = datetime.strptime(last_date_str, "%Y%m%d").date()
-        start_date = last_date + timedelta(days=1)
+    if reverse:
+        # PC用: 最新の未収集日から古い方向へ
+        if os.path.exists(TRAINING_CSV):
+            df_existing = pd.read_csv(TRAINING_CSV, usecols=["date"])
+            first_date_str = str(int(df_existing["date"].min()))
+            first_date = datetime.strptime(first_date_str, "%Y%m%d").date()
+            end_date = first_date - timedelta(days=1)
+        else:
+            end_date = today - timedelta(days=1)
+        start_date = max(end_date - timedelta(days=days - 1), oldest)
+        if start_date > end_date:
+            print(f"収集対象なし（最古: {end_date + timedelta(days=1)}）")
+            return 0
     else:
-        # 初回: 5年前から開始
-        today = date.today()
-        start_date = date(today.year - 5, today.month, today.day)
-
-    end_date = min(
-        start_date + timedelta(days=days - 1),
-        date.today() - timedelta(days=1),  # 当日は未確定のため除外
-    )
-
-    if start_date > end_date:
-        print(f"収集対象なし（最新: {start_date - timedelta(days=1)}）")
-        return 0
+        # Actions用: 最古の未収集日から新しい方向へ
+        if os.path.exists(TRAINING_CSV):
+            df_existing = pd.read_csv(TRAINING_CSV, usecols=["date"])
+            last_date_str = str(int(df_existing["date"].max()))
+            last_date = datetime.strptime(last_date_str, "%Y%m%d").date()
+            start_date = last_date + timedelta(days=1)
+        else:
+            start_date = oldest
+        end_date = min(start_date + timedelta(days=days - 1), today - timedelta(days=1))
+        if start_date > end_date:
+            print(f"収集対象なし（最新: {start_date - timedelta(days=1)}）")
+            return 0
 
     print(f"収集範囲: {start_date} 〜 {end_date}（{(end_date - start_date).days + 1}日間）")
 
@@ -171,16 +182,15 @@ def collect_incremental(days: int = 14) -> int:
     else:
         df_new.to_csv(TRAINING_CSV, index=False)
 
-    # ローリングウィンドウ: 古いデータを削除 ＋ 重複除去（PC/Actions並行収集の競合対策）
-    cutoff = (date.today() - timedelta(days=ROLLING_DAYS)).strftime("%Y%m%d")
+    # ローリングウィンドウ: 古いデータを削除
+    cutoff = (today - timedelta(days=ROLLING_DAYS)).strftime("%Y%m%d")
     df_all = pd.read_csv(TRAINING_CSV)
     before = len(df_all)
     df_all = df_all[df_all["date"].astype(str) >= cutoff]
-    df_all = df_all.drop_duplicates()
     df_all.to_csv(TRAINING_CSV, index=False)
     removed = before - len(df_all)
 
-    print(f"追記: {len(df_new)}件  削除（2年超＋重複）: {removed}件  合計: {len(df_all)}件")
+    print(f"追記: {len(df_new)}件  削除（2年超）: {removed}件  合計: {len(df_all)}件")
     return len(df_new)
 
 
@@ -206,13 +216,15 @@ def collect_training_data(years: int = 5) -> pd.DataFrame:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="競艇レースデータ収集")
-    parser.add_argument("--days",  type=int, default=None,
+    parser.add_argument("--days",    type=int, default=None,
                         help="インクリメンタル収集: 1回あたりの収集日数（例: --days 14）")
-    parser.add_argument("--years", type=int, default=5,
+    parser.add_argument("--years",   type=int, default=5,
                         help="一括収集: 過去何年分か（例: --years 5）")
+    parser.add_argument("--reverse", action="store_true",
+                        help="PC夜間収集用: 最新日付から古い方向へ収集する")
     args = parser.parse_args()
 
     if args.days is not None:
-        collect_incremental(days=args.days)
+        collect_incremental(days=args.days, reverse=args.reverse)
     else:
         collect_training_data(years=args.years)

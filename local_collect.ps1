@@ -25,9 +25,9 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# データ収集（14日分・約6時間）
-Log "[2/4] data_collector.py --days 14 を開始..."
-python data_collector.py --days 14 2>&1 | ForEach-Object { Log $_ }
+# データ収集（最新から逆順で14日分・約6時間）
+Log "[2/4] data_collector.py --days 14 --reverse を開始..."
+python data_collector.py --days 14 --reverse 2>&1 | ForEach-Object { Log $_ }
 if ($LASTEXITCODE -ne 0) {
     Log "[ERROR] data_collector.py が異常終了しました。"
     exit 1
