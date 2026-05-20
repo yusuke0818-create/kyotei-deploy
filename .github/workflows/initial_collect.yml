@@ -28,8 +28,8 @@ jobs:
       - name: 依存ライブラリをインストール
         run: pip install -r requirements.txt
 
-      - name: 差分データ収集（14日分）
-        run: python data_collector.py --days 14
+      - name: 差分データ収集（5日分）
+        run: python data_collector.py --days 5
 
       - name: モデル再学習
         run: python model.py
