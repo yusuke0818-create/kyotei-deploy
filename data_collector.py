@@ -6,6 +6,7 @@
 import os
 import re
 import time
+import json
 import argparse
 from datetime import date, timedelta, datetime
 
@@ -19,6 +20,7 @@ BASE_URL = "https://www.boatrace.jp"
 HEADERS = {"User-Agent": "kyotei-yosou-tool/1.0 (contact: yusuke0818@gmail.com)"}
 SLEEP_SEC = 1.5
 TRAINING_CSV = "data/training_data.csv"
+STATE_FILE  = "data/collection_state.json"  # 両端収集の進捗管理
 ROLLING_DAYS = 730  # 保持する日数（約2年）
 
 VENUE_CODES = [
@@ -121,43 +123,53 @@ def collect_one_day(target_date: date) -> list[dict]:
     return records
 
 
+def _load_state() -> dict:
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    return {"forward_max": None, "reverse_min": None}
+
+
+def _save_state(state: dict) -> None:
+    os.makedirs("data", exist_ok=True)
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
+
+
 def collect_incremental(days: int = 14, reverse: bool = False) -> int:
     """
     インクリメンタル収集。
-    reverse=False（GitHub Actions用）: 最古の未収集日から新しい方向へ収集
-    reverse=True （PC夜間収集用）  : 最新の未収集日から古い方向へ収集
-    両端から収集することで重複なしに効率よく5年分を埋める。
+    reverse=False（GitHub Actions用）: 5年前から現在方向へ収集
+    reverse=True （PC夜間収集用）  : 昨日から過去方向へ収集
+    進捗は collection_state.json で独立管理するため相互干渉しない。
     返り値: 追記したレコード数
     """
     os.makedirs("data", exist_ok=True)
     today = date.today()
     oldest = date(today.year - 5, today.month, today.day)
+    state = _load_state()
 
     if reverse:
-        # PC用: 最新の未収集日から古い方向へ
-        if os.path.exists(TRAINING_CSV):
-            df_existing = pd.read_csv(TRAINING_CSV, usecols=["date"])
-            first_date_str = str(int(df_existing["date"].min()))
-            first_date = datetime.strptime(first_date_str, "%Y%m%d").date()
-            end_date = first_date - timedelta(days=1)
+        # PC用: reverse_min の前日から古い方向へ
+        if state["reverse_min"]:
+            cur_min = datetime.strptime(state["reverse_min"], "%Y%m%d").date()
+            end_date = cur_min - timedelta(days=1)
         else:
             end_date = today - timedelta(days=1)
         start_date = max(end_date - timedelta(days=days - 1), oldest)
         if start_date > end_date:
-            print(f"収集対象なし（最古: {end_date + timedelta(days=1)}）")
+            print(f"収集対象なし（reverse_min: {state['reverse_min']}）")
             return 0
     else:
-        # Actions用: 最古の未収集日から新しい方向へ
-        if os.path.exists(TRAINING_CSV):
-            df_existing = pd.read_csv(TRAINING_CSV, usecols=["date"])
-            last_date_str = str(int(df_existing["date"].max()))
-            last_date = datetime.strptime(last_date_str, "%Y%m%d").date()
-            start_date = last_date + timedelta(days=1)
+        # Actions用: forward_max の翌日から新しい方向へ
+        if state["forward_max"]:
+            cur_max = datetime.strptime(state["forward_max"], "%Y%m%d").date()
+            start_date = cur_max + timedelta(days=1)
         else:
             start_date = oldest
         end_date = min(start_date + timedelta(days=days - 1), today - timedelta(days=1))
         if start_date > end_date:
-            print(f"収集対象なし（最新: {start_date - timedelta(days=1)}）")
+            print(f"収集対象なし（forward_max: {state['forward_max']}）")
             return 0
 
     print(f"収集範囲: {start_date} 〜 {end_date}（{(end_date - start_date).days + 1}日間）")
@@ -172,6 +184,7 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
 
     if not all_records:
         print("収集レコードなし")
+        # 進捗は更新しない（収集できなかった日付をスキップしないため）
         return 0
 
     df_new = pd.DataFrame(all_records)
@@ -189,6 +202,13 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
     df_all = df_all[df_all["date"].astype(str) >= cutoff]
     df_all.to_csv(TRAINING_CSV, index=False)
     removed = before - len(df_all)
+
+    # 進捗を更新（CSVではなく state.json で管理）
+    if reverse:
+        state["reverse_min"] = start_date.strftime("%Y%m%d")
+    else:
+        state["forward_max"] = end_date.strftime("%Y%m%d")
+    _save_state(state)
 
     print(f"追記: {len(df_new)}件  削除（2年超）: {removed}件  合計: {len(df_all)}件")
     return len(df_new)

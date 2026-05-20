@@ -1,8 +1,9 @@
 name: 日次データ収集＋モデル再学習（定常運用）
 
 on:
-  schedule:
-    - cron: "0 15 * * *"  # 毎日 0:00 JST（UTC 15:00）
+  # 初期収集完了・バックログ取得完了後に schedule を有効化する
+  # schedule:
+  #   - cron: "0 15 * * *"  # 毎日 0:00 JST（UTC 15:00）
   workflow_dispatch:
 
 permissions:

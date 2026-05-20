@@ -43,7 +43,7 @@ if (-not $changed) {
 
 # コミット
 Log "[3/4] コミット中..."
-git add data/training_data.csv data/model.pkl
+git add data/training_data.csv data/model.pkl data/collection_state.json
 git commit -m "chore: ローカル夜間収集 $(Get-Date -Format 'yyyy-MM-dd HH:mm') JST" 2>&1 | ForEach-Object { Log $_ }
 
 # push（競合時はrebaseして再push）
