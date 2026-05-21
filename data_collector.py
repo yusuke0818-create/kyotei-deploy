@@ -1,123 +1,229 @@
-# 目的：boatrace.jp から過去レース結果を収集してモデル学習用CSVを生成する
-# 作成日：2026-05-19
-# 対象OS：Linux（GitHub Actions）/ Windows（ローカル学習時）
-# 依存ライブラリ：requests, beautifulsoup4, pandas
-
+import argparse
+import asyncio
+import json
 import os
 import re
-import time
-import json
-import argparse
-from datetime import date, timedelta, datetime
+import unicodedata
+from datetime import date, datetime, timedelta
+from typing import Optional
 
+import aiohttp
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
 
-import scraper
 from constants import GRADE_MAP, NIGHT_VENUES
 
-BASE_URL = "https://www.boatrace.jp"
+OPEN_API_URL = "https://boatraceopenapi.github.io/results/v2/{year}/{date_str}.json"
+ENTRY_URL = "https://www.boatrace.jp/owpc/pc/race/racelist?rno={race_no}&jcd={venue_code}&hd={date_str}"
 HEADERS = {"User-Agent": "kyotei-yosou-tool/1.0 (contact: yusuke0818@gmail.com)"}
-SLEEP_SEC = 1.5
-TRAINING_CSV = "data/training_data.csv"
-STATE_FILE  = "data/collection_state.json"  # 両端収集の進捗管理
-ROLLING_DAYS = 730  # 保持する日数（約2年）
 
-VENUE_CODES = [
-    "01", "02", "03", "04", "05", "06", "07", "08",
-    "09", "10", "11", "12", "13", "14", "15", "16",
-    "17", "18", "19", "20", "21", "22", "23", "24",
-]
+TRAINING_CSV = "data/training_data.csv"
+STATE_FILE = "data/collection_state.json"
+ROLLING_DAYS = 730
+MAX_CONCURRENCY = 10
+SLEEP_SEC = 0.5
+
+
+def _norm(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).strip()
 
 
 def _is_night_race(venue_code: str, race_no: int) -> int:
     return 1 if venue_code in NIGHT_VENUES and race_no >= 9 else 0
 
 
-def _fetch(url: str) -> BeautifulSoup | None:
+async def _fetch_json(session: aiohttp.ClientSession, url: str) -> Optional[dict]:
     try:
-        time.sleep(SLEEP_SEC)
-        resp = requests.get(url, headers=HEADERS, timeout=30)
-        resp.raise_for_status()
-        return BeautifulSoup(resp.text, "html.parser")
+        async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            if resp.status == 200:
+                return await resp.json(content_type=None)
+            return None
     except Exception as e:
-        print(f"[WARN] fetch failed: {url} → {e}")
+        print(f"[WARN] JSON fetch failed: {url} -> {e}")
         return None
 
 
-def collect_race_result(venue_code: str, race_no: int, date_str: str) -> list[dict]:
-    url = f"{BASE_URL}/owpc/pc/race/raceresult?rno={race_no}&jcd={venue_code}&hd={date_str}"
-    soup = _fetch(url)
-    if soup is None:
+async def _fetch_html(
+    session: aiohttp.ClientSession, url: str, semaphore: asyncio.Semaphore
+) -> Optional[str]:
+    async with semaphore:
+        await asyncio.sleep(SLEEP_SEC)
+        try:
+            async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status == 200:
+                    return await resp.text(encoding="utf-8", errors="replace")
+                return None
+        except Exception as e:
+            print(f"[WARN] HTML fetch failed: {url} -> {e}")
+            return None
+
+
+def _parse_entry_page(html: str) -> dict[int, dict]:
+    """出走表HTMLを解析してboat_no -> 選手・モーター情報のdictを返す。"""
+    soup = BeautifulSoup(html, "html.parser")
+    entries: dict[int, dict] = {}
+    seen: set[int] = set()
+
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 7:
+            continue
+        boat_text = _norm(tds[0].get_text(strip=True))
+        if not (boat_text.isdigit() and 1 <= int(boat_text) <= 6):
+            continue
+        boat_no = int(boat_text)
+        if boat_no in seen:
+            continue
+        seen.add(boat_no)
+
+        try:
+            cell_lines = [
+                l.strip()
+                for l in tds[2].get_text(separator="\n", strip=True).split("\n")
+                if l.strip() and l.strip() != "/"
+            ]
+            racer_grade = next(
+                (l for l in cell_lines if re.match(r"^[AB][12]$", l)), "B2"
+            )
+
+            fls_parts = [
+                p.strip()
+                for p in tds[3].get_text(separator="\n", strip=True).split("\n")
+                if p.strip()
+            ]
+            fly_count = 0
+            st_avg = None
+            for p in fls_parts:
+                if p.startswith("F") and p[1:].isdigit():
+                    fly_count = int(p[1:])
+                elif re.match(r"^\d+\.\d+$", p):
+                    st_avg = float(p)
+
+            nat_parts = [
+                p.strip()
+                for p in tds[4].get_text(separator="\n", strip=True).split("\n")
+                if p.strip()
+            ]
+            win_rate = float(nat_parts[0]) if nat_parts else None
+            national_2rate = float(nat_parts[1]) / 100.0 if len(nat_parts) > 1 else None
+
+            loc_parts = [
+                p.strip()
+                for p in tds[5].get_text(separator="\n", strip=True).split("\n")
+                if p.strip()
+            ]
+            local_win_rate = float(loc_parts[0]) if loc_parts else None
+            local_2rate = float(loc_parts[1]) / 100.0 if len(loc_parts) > 1 else None
+
+            mot_parts = [
+                p.strip()
+                for p in tds[6].get_text(separator="\n", strip=True).split("\n")
+                if p.strip()
+            ]
+            motor_rate = float(mot_parts[1]) / 100.0 if len(mot_parts) > 1 else None
+
+            entries[boat_no] = {
+                "racer_grade": racer_grade,
+                "win_rate": win_rate,
+                "national_2rate": national_2rate,
+                "local_win_rate": local_win_rate,
+                "local_2rate": local_2rate,
+                "st_avg": st_avg,
+                "fly_count": fly_count,
+                "motor_rate": motor_rate,
+            }
+        except (ValueError, IndexError):
+            entries[boat_no] = {
+                "racer_grade": "B2",
+                "win_rate": None,
+                "national_2rate": None,
+                "local_win_rate": None,
+                "local_2rate": None,
+                "st_avg": None,
+                "fly_count": 0,
+                "motor_rate": None,
+            }
+
+    return entries
+
+
+async def _fetch_entry(
+    session: aiohttp.ClientSession,
+    venue_code: str,
+    race_no: int,
+    date_str: str,
+    semaphore: asyncio.Semaphore,
+) -> tuple[str, int, dict[int, dict]]:
+    url = ENTRY_URL.format(race_no=race_no, venue_code=venue_code, date_str=date_str)
+    html = await _fetch_html(session, url, semaphore)
+    if html is None:
+        return venue_code, race_no, {}
+    return venue_code, race_no, _parse_entry_page(html)
+
+
+async def collect_one_day(
+    target_date: date,
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+) -> list[dict]:
+    date_str = target_date.strftime("%Y%m%d")
+
+    # 1. Open API でその日の全レース結果を取得（1リクエスト）
+    api_url = OPEN_API_URL.format(year=target_date.year, date_str=date_str)
+    api_data = await _fetch_json(session, api_url)
+    if not api_data or "results" not in api_data:
         return []
 
-    results = []
-    for table in soup.find_all("table"):
-        for tr in table.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 2:
-                continue
-            try:
-                rank_val = int(tds[0].get_text(strip=True))
-                if not (1 <= rank_val <= 6):
-                    continue
-                boat_no = int(tds[1].get_text(strip=True))
-                if not (1 <= boat_no <= 6):
-                    continue
-                results.append({"boat_no": boat_no, "rank": rank_val})
-            except (ValueError, IndexError):
-                continue
-        if len(results) >= 3:
-            break
+    results = api_data["results"]
 
-    return results
+    # 2. 出走表を全レース分まとめて非同期取得（モーター勝率・選手情報）
+    race_keys = list({(f"{r['race_stadium_number']:02d}", r["race_number"]) for r in results})
+    tasks = [
+        _fetch_entry(session, vc, rn, date_str, semaphore)
+        for vc, rn in race_keys
+    ]
+    entries_results = await asyncio.gather(*tasks)
+    entries_map: dict[tuple, dict[int, dict]] = {
+        (vc, rn): ent for vc, rn, ent in entries_results
+    }
 
-
-def collect_one_day(target_date: date) -> list[dict]:
-    date_str = target_date.strftime("%Y%m%d")
+    # 3. API結果と出走表を結合してレコード生成
     records = []
+    for race in results:
+        venue_code = f"{race['race_stadium_number']:02d}"
+        race_no = race["race_number"]
+        wind_speed = race.get("race_wind")
+        is_night = _is_night_race(venue_code, race_no)
+        entries = entries_map.get((venue_code, race_no), {})
 
-    for venue_code in VENUE_CODES:
-        for race_no in range(1, 13):
-            entries = scraper.get_race_entries(venue_code, race_no, date_str)
-            results = collect_race_result(venue_code, race_no, date_str)
-            if not entries or not results:
+        for boat in race.get("boats", []):
+            boat_no = boat.get("racer_boat_number")
+            rank = boat.get("racer_place_number")
+            if not boat_no or not rank:
                 continue
 
-            before_info_list = scraper.get_before_info(venue_code, race_no, date_str)
-            before_map = {bi["boat_no"]: bi for bi in before_info_list}
-            rank_map = {r["boat_no"]: r["rank"] for r in results}
-            is_night = _is_night_race(venue_code, race_no)
-
-            for entry in entries:
-                boat_no = entry["boat_no"]
-                rank = rank_map.get(boat_no)
-                if rank is None:
-                    continue
-
-                bi = before_map.get(boat_no, {})
-                records.append({
-                    "date": date_str,
-                    "venue_code": venue_code,
-                    "race_no": race_no,
-                    "boat_no": boat_no,
-                    "racer_grade_num": GRADE_MAP.get(entry.get("racer_grade", "B2"), 1),
-                    "win_rate": entry.get("win_rate"),
-                    "local_win_rate": entry.get("local_win_rate"),
-                    "national_2rate": entry.get("national_2rate"),
-                    "local_2rate": entry.get("local_2rate"),
-                    "st_avg": entry.get("st_avg"),
-                    "fly_count": entry.get("fly_count", 0),
-                    "motor_rate": entry.get("motor_rate"),
-                    "exhibition_time": bi.get("exhibition_time"),
-                    "exhibition_st": bi.get("exhibition_st"),
-                    "tilt": bi.get("tilt"),
-                    "is_night": is_night,
-                    "wind_speed": None,
-                    "rank": rank,
-                    "is_first": 1 if rank == 1 else 0,
-                })
+            entry = entries.get(boat_no, {})
+            records.append({
+                "date": date_str,
+                "venue_code": venue_code,
+                "race_no": race_no,
+                "boat_no": boat_no,
+                "racer_grade_num": GRADE_MAP.get(entry.get("racer_grade", "B2"), 1),
+                "win_rate": entry.get("win_rate"),
+                "local_win_rate": entry.get("local_win_rate"),
+                "national_2rate": entry.get("national_2rate"),
+                "local_2rate": entry.get("local_2rate"),
+                "st_avg": entry.get("st_avg"),
+                "fly_count": entry.get("fly_count", 0),
+                "motor_rate": entry.get("motor_rate"),
+                "exhibition_time": None,
+                "exhibition_st": None,
+                "tilt": None,
+                "is_night": is_night,
+                "wind_speed": wind_speed,
+                "rank": rank,
+                "is_first": 1 if rank == 1 else 0,
+            })
 
     return records
 
@@ -136,20 +242,12 @@ def _save_state(state: dict) -> None:
 
 
 def collect_incremental(days: int = 14, reverse: bool = False) -> int:
-    """
-    インクリメンタル収集。
-    reverse=False（GitHub Actions用）: 5年前から現在方向へ収集
-    reverse=True （PC夜間収集用）  : 昨日から過去方向へ収集
-    進捗は collection_state.json で独立管理するため相互干渉しない。
-    返り値: 追記したレコード数
-    """
     os.makedirs("data", exist_ok=True)
     today = date.today()
     oldest = date(today.year - 5, today.month, today.day)
     state = _load_state()
 
     if reverse:
-        # PC用: reverse_min の前日から古い方向へ
         if state["reverse_min"]:
             cur_min = datetime.strptime(state["reverse_min"], "%Y%m%d").date()
             end_date = cur_min - timedelta(days=1)
@@ -157,10 +255,14 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
             end_date = today - timedelta(days=1)
         start_date = max(end_date - timedelta(days=days - 1), oldest)
         if start_date > end_date:
-            print(f"収集対象なし（reverse_min: {state['reverse_min']}）")
+            print(f"収集対象なし(reverse_min: {state['reverse_min']})")
             return 0
+        # 新しい順に処理: 途中停止しても次回は停止日の翌日から再開できる
+        date_range = [
+            end_date - timedelta(days=i)
+            for i in range((end_date - start_date).days + 1)
+        ]
     else:
-        # Actions用: forward_max の翌日から新しい方向へ
         if state["forward_max"]:
             cur_max = datetime.strptime(state["forward_max"], "%Y%m%d").date()
             start_date = cur_max + timedelta(days=1)
@@ -168,90 +270,62 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
             start_date = oldest
         end_date = min(start_date + timedelta(days=days - 1), today - timedelta(days=1))
         if start_date > end_date:
-            print(f"収集対象なし（forward_max: {state['forward_max']}）")
+            print(f"収集対象なし(forward_max: {state['forward_max']})")
             return 0
+        date_range = [
+            start_date + timedelta(days=i)
+            for i in range((end_date - start_date).days + 1)
+        ]
 
-    print(f"収集範囲: {start_date} 〜 {end_date}（{(end_date - start_date).days + 1}日間）")
+    print(f"収集範囲: {date_range[-1]} 〜 {date_range[0]}({len(date_range)}日間)")
 
-    all_records = []
-    current = start_date
-    while current <= end_date:
-        print(f"  収集中: {current.strftime('%Y-%m-%d')}")
-        records = collect_one_day(current)
-        all_records.extend(records)
-        current += timedelta(days=1)
+    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+    total_records = 0
 
-    if not all_records:
-        print("収集レコードなし（非開催日または取得失敗）")
-        # 非開催日・取得失敗でも進捗を進める（同じ日付を永遠に再試行しないため）
-        if reverse:
-            state["reverse_min"] = start_date.strftime("%Y%m%d")
-        else:
-            state["forward_max"] = end_date.strftime("%Y%m%d")
-        _save_state(state)
+    async def run():
+        nonlocal total_records
+        async with aiohttp.ClientSession() as session:
+            for current in date_range:
+                print(f"  収集中: {current.strftime('%Y-%m-%d')}")
+                records = await collect_one_day(current, session, semaphore)
+
+                if records:
+                    df_day = pd.DataFrame(records)
+                    if os.path.exists(TRAINING_CSV):
+                        df_day.to_csv(TRAINING_CSV, mode="a", header=False, index=False)
+                    else:
+                        df_day.to_csv(TRAINING_CSV, index=False)
+                    total_records += len(records)
+
+                # 1日ごとにstate保存（途中停止→次回から正しく再開）
+                if reverse:
+                    state["reverse_min"] = current.strftime("%Y%m%d")
+                else:
+                    state["forward_max"] = current.strftime("%Y%m%d")
+                _save_state(state)
+
+    asyncio.run(run())
+
+    if total_records == 0:
+        print("収集レコードなし")
         return 0
 
-    df_new = pd.DataFrame(all_records)
-
-    # CSVに追記
-    if os.path.exists(TRAINING_CSV):
-        df_new.to_csv(TRAINING_CSV, mode="a", header=False, index=False)
-    else:
-        df_new.to_csv(TRAINING_CSV, index=False)
-
-    # ローリングウィンドウ: 古いデータを削除 + 重複除去（同時書き込み競合の安全策）
+    # ローリングウィンドウ: 2年超のデータ削除 + 重複除去
     cutoff = (today - timedelta(days=ROLLING_DAYS)).strftime("%Y%m%d")
     df_all = pd.read_csv(TRAINING_CSV)
     before = len(df_all)
     df_all = df_all[df_all["date"].astype(str) >= cutoff]
-    df_all = df_all.drop_duplicates(
-        subset=["date", "venue_code", "race_no", "boat_no"]
-    )
+    df_all = df_all.drop_duplicates(subset=["date", "venue_code", "race_no", "boat_no"])
     df_all.to_csv(TRAINING_CSV, index=False)
     removed = before - len(df_all)
 
-    # 進捗を更新（CSVではなく state.json で管理）
-    if reverse:
-        state["reverse_min"] = start_date.strftime("%Y%m%d")
-    else:
-        state["forward_max"] = end_date.strftime("%Y%m%d")
-    _save_state(state)
-
-    print(f"追記: {len(df_new)}件  削除（2年超）: {removed}件  合計: {len(df_all)}件")
-    return len(df_new)
-
-
-def collect_training_data(years: int = 5) -> pd.DataFrame:
-    """過去N年分を一括収集する（初回ローカル実行用）。"""
-    end_date = date.today() - timedelta(days=1)
-    start_date = date(end_date.year - years, end_date.month, end_date.day)
-
-    all_records = []
-    current = start_date
-    while current <= end_date:
-        print(f"収集中: {current.strftime('%Y-%m-%d')}")
-        records = collect_one_day(current)
-        all_records.extend(records)
-        current += timedelta(days=1)
-
-    df = pd.DataFrame(all_records)
-    os.makedirs("data", exist_ok=True)
-    df.to_csv(TRAINING_CSV, index=False)
-    print(f"保存完了: {TRAINING_CSV}（{len(df)}件）")
-    return df
+    print(f"追記: {total_records}件  削除(2年超): {removed}件  合計: {len(df_all)}件")
+    return total_records
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="競艇レースデータ収集")
-    parser.add_argument("--days",    type=int, default=None,
-                        help="インクリメンタル収集: 1回あたりの収集日数（例: --days 14）")
-    parser.add_argument("--years",   type=int, default=5,
-                        help="一括収集: 過去何年分か（例: --years 5）")
-    parser.add_argument("--reverse", action="store_true",
-                        help="PC夜間収集用: 最新日付から古い方向へ収集する")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--days", type=int, default=14)
+    parser.add_argument("--reverse", action="store_true")
     args = parser.parse_args()
-
-    if args.days is not None:
-        collect_incremental(days=args.days, reverse=args.reverse)
-    else:
-        collect_training_data(years=args.years)
+    collect_incremental(days=args.days, reverse=args.reverse)
