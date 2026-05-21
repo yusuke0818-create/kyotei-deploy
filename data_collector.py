@@ -15,6 +15,7 @@ from constants import GRADE_MAP, NIGHT_VENUES
 
 OPEN_API_URL = "https://boatraceopenapi.github.io/results/v2/{year}/{date_str}.json"
 ENTRY_URL = "https://www.boatrace.jp/owpc/pc/race/racelist?rno={race_no}&jcd={venue_code}&hd={date_str}"
+BEFORE_URL = "https://www.boatrace.jp/owpc/pc/race/beforeinfo?rno={race_no}&jcd={venue_code}&hd={date_str}"
 HEADERS = {"User-Agent": "kyotei-yosou-tool/1.0 (contact: yusuke0818@gmail.com)"}
 
 TRAINING_CSV = "data/training_data.csv"
@@ -147,6 +148,59 @@ def _parse_entry_page(html: str) -> dict[int, dict]:
     return entries
 
 
+def _parse_before_info(html: str) -> dict[int, dict]:
+    """直前情報HTMLを解析してboat_no -> 展示タイム・展示ST・チルトのdictを返す。
+
+    実際の列構造（2026年確認済み）:
+      10列行: [0]艇番 [1]写真 [2]選手名 [3]体重 [4]展示タイム [5]チルト ...
+       3列行: [0]展示ST値 [1]"ST" [2]空 ← 直前の10列行の艇番に対応
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    before: dict[int, dict] = {}
+    last_boat_no: int | None = None
+
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all("td")
+
+        # 10列行: メインの艇データ行
+        if len(tds) >= 8:
+            boat_text = _norm(tds[0].get_text(strip=True))
+            if boat_text.isdigit() and 1 <= int(boat_text) <= 6:
+                boat_no = int(boat_text)
+                last_boat_no = boat_no
+                try:
+                    ex_text = tds[4].get_text(strip=True)
+                    exhibition_time = float(ex_text) if re.match(r"^\d+\.\d+$", ex_text) else None
+                    tilt_text = tds[5].get_text(strip=True)
+                    tilt = (
+                        float(tilt_text)
+                        if re.match(r"^[+-]?\d+\.?\d*$", tilt_text) and tilt_text
+                        else None
+                    )
+                    before[boat_no] = {
+                        "exhibition_time": exhibition_time,
+                        "exhibition_st": None,
+                        "tilt": tilt,
+                    }
+                except (ValueError, IndexError):
+                    before[boat_no] = {"exhibition_time": None, "exhibition_st": None, "tilt": None}
+
+        # 3列行: STサブ行（直前の艇番のST値）
+        elif len(tds) == 3 and last_boat_no is not None:
+            st_label = tds[1].get_text(strip=True)
+            if st_label == "ST":
+                st_text = tds[0].get_text(strip=True)
+                try:
+                    exhibition_st = float(st_text) if re.match(r"^\d+\.\d+$", st_text) else None
+                    if last_boat_no in before:
+                        before[last_boat_no]["exhibition_st"] = exhibition_st
+                except (ValueError, IndexError):
+                    pass
+                last_boat_no = None  # ST行を読んだらリセット
+
+    return before
+
+
 async def _fetch_entry(
     session: aiohttp.ClientSession,
     venue_code: str,
@@ -159,6 +213,20 @@ async def _fetch_entry(
     if html is None:
         return venue_code, race_no, {}
     return venue_code, race_no, _parse_entry_page(html)
+
+
+async def _fetch_before(
+    session: aiohttp.ClientSession,
+    venue_code: str,
+    race_no: int,
+    date_str: str,
+    semaphore: asyncio.Semaphore,
+) -> tuple[str, int, dict[int, dict]]:
+    url = BEFORE_URL.format(race_no=race_no, venue_code=venue_code, date_str=date_str)
+    html = await _fetch_html(session, url, semaphore)
+    if html is None:
+        return venue_code, race_no, {}
+    return venue_code, race_no, _parse_before_info(html)
 
 
 async def collect_one_day(
@@ -176,18 +244,22 @@ async def collect_one_day(
 
     results = api_data["results"]
 
-    # 2. 出走表を全レース分まとめて非同期取得（モーター勝率・選手情報）
+    # 2. 出走表・直前情報を全レース分まとめて非同期取得
     race_keys = list({(f"{r['race_stadium_number']:02d}", r["race_number"]) for r in results})
-    tasks = [
-        _fetch_entry(session, vc, rn, date_str, semaphore)
-        for vc, rn in race_keys
-    ]
-    entries_results = await asyncio.gather(*tasks)
+    entry_tasks = [_fetch_entry(session, vc, rn, date_str, semaphore) for vc, rn in race_keys]
+    before_tasks = [_fetch_before(session, vc, rn, date_str, semaphore) for vc, rn in race_keys]
+    entry_results, before_results = await asyncio.gather(
+        asyncio.gather(*entry_tasks),
+        asyncio.gather(*before_tasks),
+    )
     entries_map: dict[tuple, dict[int, dict]] = {
-        (vc, rn): ent for vc, rn, ent in entries_results
+        (vc, rn): ent for vc, rn, ent in entry_results
+    }
+    before_map: dict[tuple, dict[int, dict]] = {
+        (vc, rn): bi for vc, rn, bi in before_results
     }
 
-    # 3. API結果と出走表を結合してレコード生成
+    # 3. API結果・出走表・直前情報を結合してレコード生成
     records = []
     for race in results:
         venue_code = f"{race['race_stadium_number']:02d}"
@@ -195,6 +267,7 @@ async def collect_one_day(
         wind_speed = race.get("race_wind")
         is_night = _is_night_race(venue_code, race_no)
         entries = entries_map.get((venue_code, race_no), {})
+        before = before_map.get((venue_code, race_no), {})
 
         for boat in race.get("boats", []):
             boat_no = boat.get("racer_boat_number")
@@ -203,6 +276,7 @@ async def collect_one_day(
                 continue
 
             entry = entries.get(boat_no, {})
+            bi = before.get(boat_no, {})
             records.append({
                 "date": date_str,
                 "venue_code": venue_code,
@@ -216,9 +290,9 @@ async def collect_one_day(
                 "st_avg": entry.get("st_avg"),
                 "fly_count": entry.get("fly_count", 0),
                 "motor_rate": entry.get("motor_rate"),
-                "exhibition_time": None,
-                "exhibition_st": None,
-                "tilt": None,
+                "exhibition_time": bi.get("exhibition_time"),
+                "exhibition_st": bi.get("exhibition_st"),
+                "tilt": bi.get("tilt"),
                 "is_night": is_night,
                 "wind_speed": wind_speed,
                 "rank": rank,
