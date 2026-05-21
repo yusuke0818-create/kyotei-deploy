@@ -13,7 +13,9 @@ from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
 MODEL_PATH = "data/model.pkl"
-TRAINING_CSV = "data/training_data.csv"
+FORWARD_CSV = "data/forward_data.csv"
+REVERSE_CSV = "data/reverse_data.csv"
+TRAINING_CSV = "data/training_data.csv"  # 旧形式との互換用
 
 # 14特徴量（設計書確定版）
 # XGBoostはNaNをネイティブで処理するため欠損値補完は不要
@@ -37,13 +39,19 @@ FEATURES = [
 
 def train() -> float:
     """
-    training_data.csv でXGBoostを学習してmodel.pklに保存する。
+    forward_data.csv + reverse_data.csv をマージしてXGBoostを学習・model.pklに保存する。
+    どちらか一方だけでも動作する。旧形式の training_data.csv にも対応。
     返り値：バックテスト単勝的中率（例：0.423 = 42.3%）
     """
-    if not os.path.exists(TRAINING_CSV):
-        raise FileNotFoundError(f"学習データが見つかりません: {TRAINING_CSV}")
+    frames = []
+    for path in [FORWARD_CSV, REVERSE_CSV, TRAINING_CSV]:
+        if os.path.exists(path):
+            frames.append(pd.read_csv(path))
+    if not frames:
+        raise FileNotFoundError("学習データが見つかりません")
 
-    df = pd.read_csv(TRAINING_CSV)
+    df = pd.concat(frames, ignore_index=True)
+    df = df.drop_duplicates(subset=["date", "venue_code", "race_no", "boat_no"])
     # is_firstがNaNの行のみ除外。特徴量のNaNはXGBoostがネイティブ処理する
     df = df.dropna(subset=["is_first"])
     df = df.reset_index(drop=True)

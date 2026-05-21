@@ -75,6 +75,12 @@ def _parse_entry_page(html: str) -> dict[int, dict]:
         boat_no = int(boat_text)
         if boat_no in seen:
             continue
+
+        # モーターセルが空のサブ行はスキップ（データ行を待つ）
+        mot_check = tds[6].get_text(strip=True) if len(tds) > 6 else ""
+        if not mot_check:
+            continue
+
         seen.add(boat_no)
 
         try:
@@ -302,24 +308,29 @@ async def collect_one_day(
     return records
 
 
-def _load_state() -> dict:
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
+def _load_state(state_file: str) -> dict:
+    if os.path.exists(state_file):
+        with open(state_file) as f:
             return json.load(f)
     return {"forward_max": None, "reverse_min": None}
 
 
-def _save_state(state: dict) -> None:
+def _save_state(state: dict, state_file: str) -> None:
     os.makedirs("data", exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    with open(state_file, "w") as f:
         json.dump(state, f)
 
 
-def collect_incremental(days: int = 14, reverse: bool = False) -> int:
+def collect_incremental(
+    days: int = 14,
+    reverse: bool = False,
+    output_csv: str = TRAINING_CSV,
+    state_file: str = STATE_FILE,
+) -> int:
     os.makedirs("data", exist_ok=True)
     today = date.today()
     oldest = date(today.year - 5, today.month, today.day)
-    state = _load_state()
+    state = _load_state(state_file)
 
     if reverse:
         if state["reverse_min"]:
@@ -365,10 +376,10 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
 
                 if records:
                     df_day = pd.DataFrame(records)
-                    if os.path.exists(TRAINING_CSV):
-                        df_day.to_csv(TRAINING_CSV, mode="a", header=False, index=False)
+                    if os.path.exists(output_csv):
+                        df_day.to_csv(output_csv, mode="a", header=False, index=False)
                     else:
-                        df_day.to_csv(TRAINING_CSV, index=False)
+                        df_day.to_csv(output_csv, index=False)
                     total_records += len(records)
 
                 # 1日ごとにstate保存（途中停止→次回から正しく再開）
@@ -376,7 +387,7 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
                     state["reverse_min"] = current.strftime("%Y%m%d")
                 else:
                     state["forward_max"] = current.strftime("%Y%m%d")
-                _save_state(state)
+                _save_state(state, state_file)
 
     asyncio.run(run())
 
@@ -386,11 +397,11 @@ def collect_incremental(days: int = 14, reverse: bool = False) -> int:
 
     # ローリングウィンドウ: 2年超のデータ削除 + 重複除去
     cutoff = (today - timedelta(days=ROLLING_DAYS)).strftime("%Y%m%d")
-    df_all = pd.read_csv(TRAINING_CSV)
+    df_all = pd.read_csv(output_csv)
     before = len(df_all)
     df_all = df_all[df_all["date"].astype(str) >= cutoff]
     df_all = df_all.drop_duplicates(subset=["date", "venue_code", "race_no", "boat_no"])
-    df_all.to_csv(TRAINING_CSV, index=False)
+    df_all.to_csv(output_csv, index=False)
     removed = before - len(df_all)
 
     print(f"追記: {total_records}件  削除(2年超): {removed}件  合計: {len(df_all)}件")
@@ -401,5 +412,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=14)
     parser.add_argument("--reverse", action="store_true")
+    parser.add_argument("--output", type=str, default=TRAINING_CSV)
+    parser.add_argument("--state", type=str, default=STATE_FILE)
     args = parser.parse_args()
-    collect_incremental(days=args.days, reverse=args.reverse)
+    collect_incremental(days=args.days, reverse=args.reverse, output_csv=args.output, state_file=args.state)

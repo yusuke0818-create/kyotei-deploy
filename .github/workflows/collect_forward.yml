@@ -32,13 +32,13 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: collect forward 62 days
-        run: python data_collector.py --days 62
+        run: python data_collector.py --days 62 --output data/forward_data.csv --state data/state_forward.json
 
       - name: commit and push
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/training_data.csv data/collection_state.json
+          git add data/forward_data.csv data/state_forward.json
           git diff --staged --quiet && echo "no changes" && exit 0
           git commit -m "data: forward collect $(date '+%Y-%m-%d %H:%M UTC')"
           git pull --rebase origin main

@@ -22,14 +22,14 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Log "[2/4] data_collector.py --days 7 --reverse ..."
-python data_collector.py --days 7 --reverse 2>&1 | ForEach-Object { Log $_ }
+Log "[2/4] data_collector.py --days 75 --reverse ..."
+python data_collector.py --days 75 --reverse --output data/reverse_data.csv --state data/state_reverse.json 2>&1 | ForEach-Object { Log $_ }
 if ($LASTEXITCODE -ne 0) {
     Log "[ERROR] data_collector.py failed."
     exit 1
 }
 
-$changed = git status --porcelain data/training_data.csv data/model.pkl data/collection_state.json
+$changed = git status --porcelain data/reverse_data.csv data/state_reverse.json
 if (-not $changed) {
     Log "[3/4] No new data. Skip commit."
     Log "===== END ====="
@@ -37,7 +37,7 @@ if (-not $changed) {
 }
 
 Log "[3/4] Committing..."
-git add data/training_data.csv data/model.pkl data/collection_state.json
+git add data/reverse_data.csv data/state_reverse.json
 $dateStr = Get-Date -Format 'yyyy-MM-dd HH:mm'
 git commit -m "chore: local collect $dateStr JST" 2>&1 | ForEach-Object { Log $_ }
 
