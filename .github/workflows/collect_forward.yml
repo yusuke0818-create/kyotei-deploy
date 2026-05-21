@@ -1,0 +1,45 @@
+name: forward data collection (4x/day)
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # 0:00 / 6:00 / 12:00 / 18:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: collect-forward
+  cancel-in-progress: false  # 前のrunが終わるまで次を待機
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330  # 5.5時間（62日分 x 286秒 = 約5時間の余裕）
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: setup python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: install dependencies
+        run: pip install -r requirements.txt
+
+      - name: collect forward 62 days
+        run: python data_collector.py --days 62
+
+      - name: commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/training_data.csv data/collection_state.json
+          git diff --staged --quiet && echo "no changes" && exit 0
+          git commit -m "data: forward collect $(date '+%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin main
+          git push
