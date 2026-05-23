@@ -76,6 +76,10 @@ def predict(
     odds_3f = odds_3f or {}
     before_map = {b["boat_no"]: b for b in before_info}
     is_night = _is_night_race(venue_code, race_no)
+    try:
+        _venue_code_int = int(venue_code) if venue_code else 0
+    except (ValueError, TypeError):
+        _venue_code_int = 0
 
     def _to_float(v):
         """None を np.nan に変換。数値はそのまま返す。"""
@@ -87,7 +91,13 @@ def predict(
         boat_no = entry["boat_no"]
         bi = before_map.get(boat_no, {})
         rows.append({
-            "boat_no": float(boat_no),
+            "boat_no_1": float(boat_no == 1),
+            "boat_no_2": float(boat_no == 2),
+            "boat_no_3": float(boat_no == 3),
+            "boat_no_4": float(boat_no == 4),
+            "boat_no_5": float(boat_no == 5),
+            "boat_no_6": float(boat_no == 6),
+            "venue_code": float(_venue_code_int),
             "racer_grade_num": float(GRADE_MAP.get(entry.get("racer_grade", "B2"), 1)),
             "win_rate": _to_float(entry.get("win_rate")),
             "local_win_rate": _to_float(entry.get("local_win_rate")),

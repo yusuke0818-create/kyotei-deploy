@@ -13,14 +13,20 @@ from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
 
 MODEL_PATH = "data/model.pkl"
-FORWARD_CSV = "data/forward_data.csv"
-REVERSE_CSV = "data/reverse_data.csv"
-TRAINING_CSV = "data/training_data.csv"  # 旧形式との互換用
+MERGED_CSV = "data/merged_data.csv"
 
-# 14特徴量（設計書確定版）
+# 19特徴量
+# boat_noはone-hot化（コース位置ごとに独立した重みを学習するため）
+# venue_codeを追加（会場ごとにインコース有利度が異なるため）
 # XGBoostはNaNをネイティブで処理するため欠損値補完は不要
 FEATURES = [
-    "boat_no",          # 艇番 (1-6)
+    "boat_no_1",        # 1号艇フラグ (0/1)
+    "boat_no_2",        # 2号艇フラグ (0/1)
+    "boat_no_3",        # 3号艇フラグ (0/1)
+    "boat_no_4",        # 4号艇フラグ (0/1)
+    "boat_no_5",        # 5号艇フラグ (0/1)
+    "boat_no_6",        # 6号艇フラグ (0/1)
+    "venue_code",       # 会場コード整数値 (1-24)
     "racer_grade_num",  # 選手グレード数値化 (A1=4, A2=3, B1=2, B2=1)
     "win_rate",         # 全国勝率
     "local_win_rate",   # 当地勝率
@@ -39,24 +45,24 @@ FEATURES = [
 
 def train() -> float:
     """
-    forward_data.csv + reverse_data.csv をマージしてXGBoostを学習・model.pklに保存する。
-    どちらか一方だけでも動作する。旧形式の training_data.csv にも対応。
+    merge_csv.py で生成した merged_data.csv を読み込んでXGBoostを学習・model.pklに保存する。
     返り値：バックテスト単勝的中率（例：0.423 = 42.3%）
     """
-    frames = []
-    for path in [FORWARD_CSV, REVERSE_CSV, TRAINING_CSV]:
-        if os.path.exists(path):
-            frames.append(pd.read_csv(path))
-    if not frames:
-        raise FileNotFoundError("学習データが見つかりません")
+    if not os.path.exists(MERGED_CSV):
+        raise FileNotFoundError(f"学習データが見つかりません: {MERGED_CSV}")
 
-    df = pd.concat(frames, ignore_index=True)
-    df = df.drop_duplicates(subset=["date", "venue_code", "race_no", "boat_no"])
+    df = pd.read_csv(MERGED_CSV)
     # is_firstがNaNの行のみ除外。特徴量のNaNはXGBoostがネイティブ処理する
     df = df.dropna(subset=["is_first"])
     df = df.reset_index(drop=True)
 
-    # FEATURES列が存在しない場合はNaNで補完（旧データとの互換性）
+    # boat_noをone-hotエンコーディング
+    for i in range(1, 7):
+        df[f"boat_no_{i}"] = (df["boat_no"] == i).astype(float)
+    # venue_codeを整数に変換
+    df["venue_code"] = pd.to_numeric(df["venue_code"], errors="coerce").fillna(0).astype(int)
+
+    # FEATURES列が存在しない場合はNaNで補完
     for col in FEATURES:
         if col not in df.columns:
             df[col] = np.nan
@@ -66,7 +72,7 @@ def train() -> float:
     y = df["is_first"]
 
     if "date" in df.columns:
-        df_dates = df["date"].astype(str)
+        df_dates = df["date"].astype(int).astype(str)
         cutoff = df_dates.max()
         # うるう年（2/29等）に対応するため datetime で安全に1年引く
         cutoff_date = datetime.strptime(cutoff, "%Y%m%d").date()
