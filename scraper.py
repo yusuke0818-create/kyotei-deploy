@@ -6,9 +6,17 @@
 import re
 import time
 import unicodedata
+from datetime import datetime, timezone, timedelta
 
 import requests
 from bs4 import BeautifulSoup
+
+_JST = timezone(timedelta(hours=9))
+
+
+def today_jst() -> str:
+    """Renderサーバー（UTC）でも日本時間の今日の日付を返す。"""
+    return datetime.now(_JST).strftime("%Y%m%d")
 
 BASE_URL = "https://www.boatrace.jp"
 HEADERS = {
@@ -389,8 +397,7 @@ def get_today_schedule() -> list[dict]:
     current_race: インデックスページの会場リンクから抽出したレース番号。
                   取得できない場合は None（GUIでは全レース有効扱い）。
     """
-    from datetime import date as _date
-    today_str = _date.today().strftime("%Y%m%d")
+    today_str = today_jst()
 
     url = f"{BASE_URL}/owpc/pc/race/index"
     soup = _fetch(url)

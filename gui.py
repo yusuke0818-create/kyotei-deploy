@@ -403,7 +403,7 @@ def build_top_screen(page: ft.Page) -> None:
 
         def _run():
             try:
-                today = date.today().strftime("%Y%m%d")
+                today = scraper.today_jst()
                 vc = state["venue_code"]
                 rno = state["race_no"]
                 vn = state["venue_name"]
@@ -551,14 +551,14 @@ def build_debug_screen(page: ft.Page) -> None:
     def _run():
         lines = []
         today_utc = date.today().strftime("%Y%m%d")
-        today_jst = (date.today() + timedelta(hours=9)).strftime("%Y%m%d")  # ※ UTC環境用概算
-        lines.append(f"date.today()          = {today_utc}")
-        lines.append(f"JST概算(UTC+9)        = {today_jst}")
+        today_jst_str = scraper.today_jst()
+        lines.append(f"date.today() UTC      = {today_utc}")
+        lines.append(f"today_jst() JSTfix    = {today_jst_str}")
         lines.append("")
 
         for vc, name, rno in [("11", "びわこ", 1), ("01", "桐生", 1)]:
             url = (f"https://www.boatrace.jp/owpc/pc/race/racelist"
-                   f"?rno={rno}&jcd={vc}&hd={today_utc}")
+                   f"?rno={rno}&jcd={vc}&hd={today_jst_str}")
             lines.append(f"=== {name} {rno}R (hd={today_utc}) ===")
             lines.append(f"URL: {url}")
             try:
@@ -576,7 +576,7 @@ def build_debug_screen(page: ft.Page) -> None:
                 lines.append(f"ERROR  : {ex}")
 
             lines.append("")
-            entries = scraper.get_race_entries(vc, rno, today_utc)
+            entries = scraper.get_race_entries(vc, rno, today_jst_str)
             lines.append(f"entries({len(entries)}件):")
             for e in entries:
                 lines.append(
