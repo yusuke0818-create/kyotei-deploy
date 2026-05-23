@@ -14,7 +14,7 @@ BASE_URL = "https://www.boatrace.jp"
 HEADERS = {
     "User-Agent": "kyotei-yosou-tool/1.0 (contact: yusuke0818@gmail.com)"
 }
-SLEEP_SEC = 1.5
+SLEEP_SEC = 0.8
 
 VENUE_CODES = {
     "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04",
@@ -75,6 +75,13 @@ def get_race_entries(venue_code: str, race_no: int, date_str: str) -> list[dict]
         if not (boat_text.isdigit() and 1 <= int(boat_text) <= 6):
             continue
         boat_no = int(boat_text)
+
+        # 本行判定: tds[2] に4桁の登録番号が含まれる行のみを本行とする
+        # （節間成績の着順サブ行には4桁番号がなく誤認識されるため除外）
+        cell2_text = tds[2].get_text(separator="\n", strip=True)
+        if not re.search(r"\d{4}", cell2_text):
+            continue
+
         if boat_no in seen_boats:
             continue
         seen_boats.add(boat_no)

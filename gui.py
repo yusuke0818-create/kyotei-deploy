@@ -4,6 +4,7 @@
 # 依存ライブラリ：flet
 
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 
 import flet as ft
@@ -412,10 +413,16 @@ def build_top_screen(page: ft.Page) -> None:
                     _update_ui("出走情報を取得できませんでした（E001）", C_ERROR, False)
                     return
 
-                before_info = scraper.get_before_info(vc, rno, today)
-                odds      = scraper.get_odds(vc, rno, today)
-                odds_2f   = scraper.get_odds_2f(vc, rno, today)
-                odds_3f   = scraper.get_odds_3f(vc, rno, today)
+                # before_info / odds / odds_2f / odds_3f を並行取得
+                with ThreadPoolExecutor(max_workers=4) as ex:
+                    fut_bi   = ex.submit(scraper.get_before_info, vc, rno, today)
+                    fut_odds = ex.submit(scraper.get_odds, vc, rno, today)
+                    fut_2f   = ex.submit(scraper.get_odds_2f, vc, rno, today)
+                    fut_3f   = ex.submit(scraper.get_odds_3f, vc, rno, today)
+                before_info = fut_bi.result()
+                odds        = fut_odds.result()
+                odds_2f     = fut_2f.result()
+                odds_3f     = fut_3f.result()
 
                 result = predictor.predict(
                     entries, before_info, odds, odds_2f, odds_3f,
