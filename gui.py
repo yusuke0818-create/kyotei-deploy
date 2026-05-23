@@ -5,7 +5,6 @@
 
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timezone, timedelta
 
 import flet as ft
 
@@ -527,68 +526,3 @@ def build_top_screen(page: ft.Page) -> None:
 
     # ページ描画後にスケジュール取得を開始
     threading.Thread(target=_load_schedule, daemon=True).start()
-
-
-# ── デバッグ画面 ────────────────────────────────────────────────
-def build_debug_screen(page: ft.Page) -> None:
-    """
-    /debug にアクセスしたときに表示するデバッグ画面。
-    Renderサーバーからのスクレイピング実況を確認する用途。
-    """
-    import requests as _req
-    import re as _re
-
-    output = ft.Text("取得中...", color=C_TEXT, size=12, selectable=True)
-
-    page.controls.clear()
-    page.add(ft.Column([
-        ft.Text("DEBUG: scraping check", color=C_ACCENT,
-                size=14, weight=ft.FontWeight.BOLD),
-        output,
-    ], scroll=ft.ScrollMode.AUTO, expand=True))
-    page.update()
-
-    def _run():
-        lines = []
-        today_utc = date.today().strftime("%Y%m%d")
-        today_jst_str = scraper.today_jst()
-        lines.append(f"date.today() UTC      = {today_utc}")
-        lines.append(f"today_jst() JSTfix    = {today_jst_str}")
-        lines.append("")
-
-        for vc, name, rno in [("11", "びわこ", 1), ("01", "桐生", 1)]:
-            url = (f"https://www.boatrace.jp/owpc/pc/race/racelist"
-                   f"?rno={rno}&jcd={vc}&hd={today_jst_str}")
-            lines.append(f"=== {name} {rno}R (hd={today_utc}) ===")
-            lines.append(f"URL: {url}")
-            try:
-                import time as _t
-                _t.sleep(0.5)
-                resp = _req.get(url, headers=scraper.HEADERS, timeout=30)
-                lines.append(f"status : {resp.status_code}")
-                lines.append(f"length : {len(resp.text)} chars")
-                # ページタイトル抽出
-                title_m = _re.search(r"<title>(.*?)</title>", resp.text)
-                lines.append(f"title  : {title_m.group(1) if title_m else '(none)'}")
-                # 先頭300文字（HTML）
-                lines.append(f"head   : {repr(resp.text[:300])}")
-            except Exception as ex:
-                lines.append(f"ERROR  : {ex}")
-
-            lines.append("")
-            entries = scraper.get_race_entries(vc, rno, today_jst_str)
-            lines.append(f"entries({len(entries)}件):")
-            for e in entries:
-                lines.append(
-                    f"  艇{e['boat_no']}: {e['racer_name']} "
-                    f"({e['racer_id']}) {e['racer_grade']} win={e['win_rate']}"
-                )
-            lines.append("")
-
-        output.value = "\n".join(lines)
-        try:
-            page.update()
-        except Exception:
-            pass
-
-    threading.Thread(target=_run, daemon=True).start()

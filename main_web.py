@@ -17,14 +17,7 @@ def main(page: ft.Page) -> None:
     page.padding = ft.Padding(left=12, right=12, top=0, bottom=0)
     page.scroll = ft.ScrollMode.AUTO
 
-    def route_change(e):
-        if page.route == "/debug":
-            gui.build_debug_screen(page)
-        else:
-            gui.build_top_screen(page)
-
-    page.on_route_change = route_change
-    page.go(page.route)
+    gui.build_top_screen(page)
 
 
 # モデルをプロセス起動時に1回だけロード（接続ごとに呼ばれる main() の外に置く）
