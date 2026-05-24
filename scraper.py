@@ -202,13 +202,12 @@ def get_race_entries(venue_code: str, race_no: int, date_str: str) -> list[dict]
 
 def get_before_info(venue_code: str, race_no: int, date_str: str) -> list[dict]:
     """
-    直前情報（展示タイム・展示ST・チルト・部品交換）を返す。
+    直前情報（展示タイム・展示ST・チルト）を返す。
     未公開時は空リストを返す。
 
-    beforeinfo ページの列構造（boatrace.jp 検証済み）:
-      [0] 艇番 / [1] 展示タイム / [2] ST（展示スタートタイミング）
-      [3] チルト / [4] プロペラ交換（変更番号 or 空）/ [5] モーター交換（変更番号 or 空）
-    列が 3 列未満の行はヘッダー行等として除外する。
+    beforeinfo ページの実際の列構造（2026-05-24 実機検証）:
+      本行: [0]艇番 / [1]空 / [2]選手名 / [3]体重 / [4]展示タイム / [5]チルト
+      サブ行（本行直後・tds[1]=="ST"）: [0]? / [1]"ST" / [2]展示ST（".09"形式）
 
     返り値例:
     [{"boat_no": 1, "exhibition_time": 6.78, "exhibition_st": 0.11,
@@ -219,66 +218,65 @@ def get_before_info(venue_code: str, race_no: int, date_str: str) -> list[dict]:
     if soup is None:
         return []
 
+    # 3列以上のTR行をすべて収集してペア処理する
+    all_rows = [
+        tr.find_all("td")
+        for tr in soup.find_all("tr")
+        if len(tr.find_all("td")) >= 3
+    ]
+
     before_info = []
     seen_boats: set[int] = set()
-
-    for tr in soup.find_all("tr"):
-        tds = tr.find_all("td")
-        if len(tds) < 3:
-            continue
-
+    i = 0
+    while i < len(all_rows):
+        tds = all_rows[i]
         boat_text = _norm(tds[0].get_text(strip=True))
         if not (boat_text.isdigit() and 1 <= int(boat_text) <= 6):
+            i += 1
             continue
         boat_no = int(boat_text)
         if boat_no in seen_boats:
+            i += 1
             continue
         seen_boats.add(boat_no)
 
+        # 本行: tds[4]=展示タイム, tds[5]=チルト
         try:
-            # 展示タイム
-            ex_text = tds[1].get_text(strip=True) if len(tds) > 1 else ""
-            exhibition_time = (
-                float(ex_text) if re.match(r"^\d+\.\d+$", ex_text) else None
-            )
+            ex_text = tds[4].get_text(strip=True) if len(tds) > 4 else ""
+            exhibition_time = float(ex_text) if re.match(r"^\d+\.\d+$", ex_text) else None
 
-            # 展示ST
-            st_text = tds[2].get_text(strip=True) if len(tds) > 2 else ""
-            exhibition_st = (
-                float(st_text) if re.match(r"^\d+\.\d+$", st_text) else None
-            )
-
-            # チルト（例: "0.0", "+0.5", "-1.0"）
-            tilt_text = tds[3].get_text(strip=True) if len(tds) > 3 else ""
+            tilt_text = tds[5].get_text(strip=True) if len(tds) > 5 else ""
             tilt = (
                 float(tilt_text)
                 if re.match(r"^[+-]?\d+\.?\d*$", tilt_text) and tilt_text
                 else None
             )
-
-            # 部品交換: 空/ハイフン以外のテキストがあれば交換あり
-            _EMPTY = {"", "---", "ー", "－", "-", "なし"}
-            parts = []
-            if len(tds) > 4:
-                prop_text = tds[4].get_text(strip=True)
-                if prop_text not in _EMPTY:
-                    parts.append("プロペラ")
-            if len(tds) > 5:
-                mot_text = tds[5].get_text(strip=True)
-                if mot_text not in _EMPTY:
-                    parts.append("モーター")
-            parts_changed = "・".join(parts) if parts else None
-
-            before_info.append({
-                "boat_no": boat_no,
-                "exhibition_time": exhibition_time,
-                "exhibition_st": exhibition_st,
-                "tilt": tilt,
-                "parts_changed": parts_changed,
-            })
-
         except (ValueError, IndexError):
-            continue
+            exhibition_time = None
+            tilt = None
+
+        # サブ行: tds[1]=="ST" なら tds[2] が展示ST（".09" → 0.09）
+        exhibition_st = None
+        i += 1
+        if i < len(all_rows):
+            sub = all_rows[i]
+            if len(sub) > 1 and sub[1].get_text(strip=True) == "ST":
+                st_raw = sub[2].get_text(strip=True) if len(sub) > 2 else ""
+                if st_raw:
+                    try:
+                        # ".09" 形式（先頭ドット）を "0.09" に補正
+                        exhibition_st = float("0" + st_raw if st_raw.startswith(".") else st_raw)
+                    except ValueError:
+                        exhibition_st = None
+                i += 1  # サブ行を消費
+
+        before_info.append({
+            "boat_no": boat_no,
+            "exhibition_time": exhibition_time,
+            "exhibition_st": exhibition_st,
+            "tilt": tilt,
+            "parts_changed": None,
+        })
 
     return sorted(before_info, key=lambda x: x["boat_no"])
 
