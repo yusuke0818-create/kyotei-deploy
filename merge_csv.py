@@ -8,7 +8,7 @@ import os
 import pandas as pd
 
 FILES = [
-    "data/fallback_data_snapshot.csv",
+    "data/fallback_data.csv",
     "data/reverse_data.csv",
     "data/training_data.csv",
 ]
