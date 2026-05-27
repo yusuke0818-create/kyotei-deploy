@@ -407,21 +407,22 @@ def build_top_screen(page: ft.Page) -> None:
                 rno = state["race_no"]
                 vn = state["venue_name"]
 
-                entries = scraper.get_race_entries(vc, rno, today)
-                if not entries:
-                    _update_ui("出走情報を取得できませんでした（E001）", C_ERROR, False)
-                    return
-
-                # before_info / odds / odds_2f / odds_3f を並行取得
-                with ThreadPoolExecutor(max_workers=4) as ex:
-                    fut_bi   = ex.submit(scraper.get_before_info, vc, rno, today)
-                    fut_odds = ex.submit(scraper.get_odds, vc, rno, today)
-                    fut_2f   = ex.submit(scraper.get_odds_2f, vc, rno, today)
-                    fut_3f   = ex.submit(scraper.get_odds_3f, vc, rno, today)
+                # entries を含む5リクエストを全て並列取得
+                with ThreadPoolExecutor(max_workers=5) as ex:
+                    fut_entries = ex.submit(scraper.get_race_entries, vc, rno, today)
+                    fut_bi      = ex.submit(scraper.get_before_info,  vc, rno, today)
+                    fut_odds    = ex.submit(scraper.get_odds,          vc, rno, today)
+                    fut_2f      = ex.submit(scraper.get_odds_2f,       vc, rno, today)
+                    fut_3f      = ex.submit(scraper.get_odds_3f,       vc, rno, today)
+                entries     = fut_entries.result()
                 before_info = fut_bi.result()
                 odds        = fut_odds.result()
                 odds_2f     = fut_2f.result()
                 odds_3f     = fut_3f.result()
+
+                if not entries:
+                    _update_ui("出走情報を取得できませんでした（E001）", C_ERROR, False)
+                    return
 
                 result = predictor.predict(
                     entries, before_info, odds, odds_2f, odds_3f,

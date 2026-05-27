@@ -24,6 +24,9 @@ HEADERS = {
 }
 SLEEP_SEC = 0.8
 
+_session = requests.Session()
+_session.headers.update(HEADERS)
+
 VENUE_CODES = {
     "桐生": "01", "戸田": "02", "江戸川": "03", "平和島": "04",
     "多摩川": "05", "浜名湖": "06", "蒲郡": "07", "常滑": "08",
@@ -35,10 +38,11 @@ VENUE_CODES = {
 VENUE_NAMES = {v: k for k, v in VENUE_CODES.items()}
 
 
-def _fetch(url: str) -> BeautifulSoup | None:
+def _fetch(url: str, skip_sleep: bool = False) -> BeautifulSoup | None:
     try:
-        time.sleep(SLEEP_SEC)
-        resp = requests.get(url, headers=HEADERS, timeout=30)
+        if not skip_sleep:
+            time.sleep(SLEEP_SEC)
+        resp = _session.get(url, timeout=30)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
@@ -398,7 +402,7 @@ def get_today_schedule() -> list[dict]:
     today_str = today_jst()
 
     url = f"{BASE_URL}/owpc/pc/race/index"
-    soup = _fetch(url)
+    soup = _fetch(url, skip_sleep=True)
     if soup is None:
         return []
 
