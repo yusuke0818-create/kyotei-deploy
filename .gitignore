@@ -4,3 +4,10 @@ __pycache__/
 .env
 *.log
 logs/
+
+# 大容量CSVはGitHub管理対象外（ローカルのみ）
+data/merged_data.csv
+data/fallback_data.csv
+data/fallback_data_snapshot.csv
+data/training_data.csv
+data/reverse_data.csv
