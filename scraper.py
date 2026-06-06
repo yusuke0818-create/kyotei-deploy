@@ -215,12 +215,17 @@ def get_before_info(venue_code: str, race_no: int, date_str: str) -> list[dict]:
 
     返り値例:
     [{"boat_no": 1, "exhibition_time": 6.78, "exhibition_st": 0.11,
-      "tilt": 0.0, "parts_changed": None}, ...]
+      "tilt": 0.0, "parts_changed": None, "wind_speed": 2.0}, ...]
+    wind_speed は全艇共通値。取得できない場合は None。
     """
     url = f"{BASE_URL}/owpc/pc/race/beforeinfo?rno={race_no}&jcd={venue_code}&hd={date_str}"
     soup = _fetch(url)
     if soup is None:
         return []
+
+    # 水面気象情報から風速を抽出（全艇共通値。取得できない場合は None）
+    m = re.search(r"風速[：:]\s*(\d+(?:\.\d+)?)", soup.get_text())
+    wind_speed = float(m.group(1)) if m else None
 
     # 3列以上のTR行をすべて収集してペア処理する
     all_rows = [
@@ -280,6 +285,7 @@ def get_before_info(venue_code: str, race_no: int, date_str: str) -> list[dict]:
             "exhibition_st": exhibition_st,
             "tilt": tilt,
             "parts_changed": None,
+            "wind_speed": wind_speed,
         })
 
     return sorted(before_info, key=lambda x: x["boat_no"])

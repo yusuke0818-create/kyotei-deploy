@@ -110,7 +110,7 @@ def predict(
             "exhibition_st": _to_float(bi.get("exhibition_st")),
             "tilt": _to_float(bi.get("tilt")),
             "is_night": float(is_night),
-            "wind_speed": np.nan,
+            "wind_speed": _to_float(bi.get("wind_speed")),
         })
 
     features_df = pd.DataFrame(rows, dtype=float)
