@@ -3,6 +3,7 @@
 # 対象OS：Linux（Render Web）/ Windows
 # 依存ライブラリ：flet
 
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -35,6 +36,30 @@ BOAT_COLORS = {
     5: {"bg": "#FFD700", "text": "#000000"},
     6: {"bg": "#008000", "text": "#FFFFFF"},
 }
+
+FEATURE_LABELS = {
+    "boat_no":         "艇番（コース）",
+    "racer_grade_num": "選手グレード（A1〜B2）",
+    "win_rate":        "全国勝率",
+    "local_win_rate":  "当地勝率",
+    "national_2rate":  "全国2連率",
+    "local_2rate":     "当地2連率",
+    "st_avg":          "平均スタートタイム",
+    "fly_count":       "フライング件数",
+    "motor_rate":      "モーター2連率",
+    "exhibition_time": "展示タイム（直前）",
+    "exhibition_st":   "展示ST（直前）",
+    "tilt":            "チルト角（直前）",
+    "is_night":        "ナイター開催フラグ（自動判定）",
+    "wind_speed":      "風速",
+}
+SETTINGS_KEY = "kyotei_feature_settings"
+
+# 基本情報グループ（最低1項目必須）
+BASIC_FEATURES = [
+    "boat_no", "racer_grade_num", "win_rate", "local_win_rate",
+    "national_2rate", "local_2rate", "st_avg", "fly_count", "motor_rate",
+]
 
 # scraper.VENUE_CODES（name→code dict）から順序を保って生成
 VENUE_LIST: list[tuple[str, str]] = list(scraper.VENUE_CODES.items())
@@ -256,6 +281,137 @@ def build_result_screen(page: ft.Page, result: dict) -> None:
     page.update()
 
 
+# ── 設定画面 ────────────────────────────────────────────────────
+async def build_settings_screen(page: ft.Page) -> None:
+    settings_json = await page.shared_preferences.get(SETTINGS_KEY)
+    settings = (
+        json.loads(settings_json)
+        if settings_json
+        else {f: True for f in FEATURE_LABELS}
+    )
+
+    toggle_btn = ft.TextButton(
+        "すべて解除" if all(settings.values()) else "すべて選択",
+        style=ft.ButtonStyle(color=C_ACCENT),
+    )
+
+    def _update_toggle_label():
+        toggle_btn.content = "すべて解除" if all(settings.values()) else "すべて選択"
+
+    def _make_handler(feat):
+        async def _handler(e):
+            if not e.control.value and feat in BASIC_FEATURES:
+                basic_checked = [f for f in BASIC_FEATURES if settings.get(f, True)]
+                if len(basic_checked) <= 1:
+                    e.control.value = True
+                    e.control.update()
+                    page.snack_bar = ft.SnackBar(
+                        content=ft.Text("基本情報は最低1項目必要です"),
+                        open=True,
+                    )
+                    page.update()
+                    return
+            settings[feat] = e.control.value
+            _update_toggle_label()
+            toggle_btn.update()
+            await page.shared_preferences.set(SETTINGS_KEY, json.dumps(settings))
+        return _handler
+
+    async def toggle_all(e):
+        new_val = not all(settings.values())
+        for feat in FEATURE_LABELS:
+            # すべて解除のとき、基本情報の先頭（艇番）だけ残す
+            keep = (not new_val and feat == BASIC_FEATURES[0])
+            settings[feat] = True if keep else new_val
+            checkboxes_by_feat[feat].value = settings[feat]
+            checkboxes_by_feat[feat].update()
+        await page.shared_preferences.set(SETTINGS_KEY, json.dumps(settings))
+        _update_toggle_label()
+        toggle_btn.update()
+
+    toggle_btn.on_click = toggle_all
+
+    checkboxes_by_feat = {}
+    checkboxes = []
+    for feat, label in FEATURE_LABELS.items():
+        cb = ft.Checkbox(
+            label=label,
+            value=settings.get(feat, True),
+            active_color=C_ACCENT,
+            label_style=ft.TextStyle(color=C_TEXT, size=14),
+            on_change=_make_handler(feat),
+        )
+        checkboxes.append(cb)
+        checkboxes_by_feat[feat] = cb
+
+    def _divider_row(text: str) -> ft.Row:
+        return ft.Row([
+            ft.Container(content=ft.Divider(color=C_BORDER, height=1), expand=True),
+            ft.Text(f" {text} ", size=11, color=C_SUB),
+            ft.Container(content=ft.Divider(color=C_BORDER, height=1), expand=True),
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=0)
+
+    items = []
+    for i, cb in enumerate(checkboxes):
+        if i == 0:
+            items.append(_divider_row("基本情報（最低1項目必須）"))
+        elif i == 9:
+            items.append(_divider_row("直前情報"))
+        elif i == 12:
+            items.append(_divider_row("環境情報"))
+        items.append(cb)
+
+    def go_back(e):
+        build_top_screen(page)
+
+    header = ft.Container(
+        content=ft.Row([
+            ft.Text("予測設定", size=16, color=C_TEXT, weight=ft.FontWeight.BOLD),
+            ft.TextButton(
+                "< 戻る",
+                style=ft.ButtonStyle(color=C_SUB),
+                on_click=go_back,
+            ),
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+        bgcolor=C_CARD,
+        padding=_pad(h=14, v=10),
+        border=ft.Border(bottom=ft.BorderSide(1, C_BORDER)),
+    )
+
+    page.controls.clear()
+    page.add(
+        header,
+        ft.Container(
+            content=ft.Column([
+                ft.Row(
+                    [_label("使用する予測項目（14項目）"), toggle_btn],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Container(
+                    content=ft.Column(items, spacing=2),
+                    bgcolor=C_CARD, padding=10, border_radius=8,
+                ),
+                ft.Container(
+                    content=ft.Column([
+                        ft.Text(
+                            "※ チェックを外した項目は NaN として予測モデルに渡されます（精度は低下します）",
+                            size=12, color=C_SUB,
+                        ),
+                        ft.Text(
+                            "※ 設定はこのブラウザに自動保存されます",
+                            size=12, color=C_SUB,
+                        ),
+                    ], spacing=4),
+                    margin=_mar(top=12),
+                ),
+            ], spacing=0),
+            padding=_pad(h=14, bottom=40),
+        ),
+    )
+    page.update()
+
+
 # ── トップ画面 ──────────────────────────────────────────────────
 def build_top_screen(page: ft.Page) -> None:
     state = {
@@ -274,7 +430,16 @@ def build_top_screen(page: ft.Page) -> None:
                 "競艇舟券予想ツール", size=18,
                 color=C_TITLE, weight=ft.FontWeight.BOLD,
             ),
-            ft.Text("v1.0", size=11, color=C_SUB),
+            ft.Row([
+                ft.Text("v2.0", size=11, color=C_SUB),
+                ft.IconButton(
+                    icon=ft.icons.Icons.SETTINGS,
+                    icon_color=C_SUB,
+                    icon_size=20,
+                    tooltip="予測設定",
+                    on_click=lambda e: page.run_task(build_settings_screen, page),
+                ),
+            ], spacing=0),
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         bgcolor=C_CARD,
         padding=_pad(h=14, v=12),
@@ -390,7 +555,19 @@ def build_top_screen(page: ft.Page) -> None:
             except Exception:
                 pass  # セッション切断時など更新失敗は無視
 
-    def on_fetch(e):
+    async def on_fetch(e):
+        settings_json = await page.shared_preferences.get(SETTINGS_KEY)
+        settings = (
+            json.loads(settings_json)
+            if settings_json
+            else {f: True for f in FEATURE_LABELS}
+        )
+        disabled = [f for f, v in settings.items() if not v]
+
+        if len(disabled) == len(FEATURE_LABELS):
+            _update_ui("予測項目が0件です。設定画面で1つ以上チェックしてください", C_ERROR, False)
+            return
+
         if not state["venue_code"]:
             _update_ui("会場を選択してください", C_ERROR, False)
             return
@@ -427,6 +604,7 @@ def build_top_screen(page: ft.Page) -> None:
                 result = predictor.predict(
                     entries, before_info, odds, odds_2f, odds_3f,
                     venue_code=vc, race_no=rno,
+                    disabled_features=disabled if disabled else None,
                 )
                 result["venue_name"] = vn
                 result["race_no"] = rno

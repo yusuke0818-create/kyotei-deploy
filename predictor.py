@@ -55,6 +55,7 @@ def predict(
     odds_3f: dict[str, float] | None = None,
     venue_code: str = "",
     race_no: int = 0,
+    disabled_features: list[str] | None = None,
 ) -> dict:
     """
     出走情報・直前情報・各種オッズを受け取り予測結果を返す。
@@ -114,6 +115,15 @@ def predict(
         })
 
     features_df = pd.DataFrame(rows, dtype=float)
+
+    if disabled_features:
+        for col in disabled_features:
+            if col == "boat_no":
+                for i in range(1, 7):
+                    features_df[f"boat_no_{i}"] = np.nan
+            elif col in features_df.columns:
+                features_df[col] = np.nan
+
     probs = predict_proba(_model, features_df)
 
     # スコア（0〜100）に変換してリスト化
