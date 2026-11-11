@@ -198,4 +198,6 @@ def predict(
         "backtest_accuracy": _accuracy if _accuracy is not None else 0.0,
         "before_info": before_info,
         "odds": odds,
+        # オッズを1種類でも取得できたか（画面で「オッズ未取得」と「該当なし」を区別する）
+        "odds_available": bool(odds or odds_2f or odds_3f),
     }

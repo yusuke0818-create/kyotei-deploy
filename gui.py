@@ -189,17 +189,24 @@ def build_result_screen(page: ft.Page, result: dict) -> None:
         bgcolor=C_CARD, padding=10, border_radius=8,
     ))
 
-    # おすすめ舟券
-    controls.append(_label("おすすめ舟券"))
+    # 期待値の参考計算（旧「おすすめ舟券」）
+    # 販売時の注意事項（統計的な参考情報・的中保証なし）に合わせた表示にしている
+    controls.append(_label("期待値の参考計算"))
     recs = result.get("recommendations", [])
+    note = ft.Text(
+        "予測確率 × 取得時点のオッズで計算した、期待値が1.0を超える舟券です。"
+        "統計的な参考情報であり、的中を保証するものではありません。"
+        "オッズは締切まで変動します。",
+        size=10, color=C_SUB,
+    )
     if recs:
-        rec_rows = []
+        rec_rows = [note]
         for r in recs:
             boats_str = "→".join(map(str, r["boats"]))
             rec_rows.append(ft.Row([
                 ft.Text(r["type"],  size=12, color=C_TEXT, width=44),
                 ft.Text(boats_str, size=14, color=C_ACCENT,
-                        weight=ft.FontWeight.BOLD, width=50),
+                        weight=ft.FontWeight.BOLD, width=72),  # 3連単「1→2→4」が1行に収まる幅
                 ft.Text(f"オッズ {r['odds']}", size=12, color=C_SUB, expand=True),
                 ft.Text(f"期待値 {r['ev']:.2f}", size=12, color=C_SUCCESS),
             ], spacing=6))
@@ -208,11 +215,12 @@ def build_result_screen(page: ft.Page, result: dict) -> None:
             bgcolor=C_CARD, padding=10, border_radius=8,
         ))
     else:
+        if result.get("odds_available", True):
+            msg = "期待値が1.0を超える舟券はありません"
+        else:
+            msg = "オッズを取得できませんでした\n（発売前、または取得に失敗した可能性があります）"
         controls.append(ft.Container(
-            content=ft.Text(
-                "現時点でオッズ有利な舟券はありません\n（オッズ未確定または期待値 < 1.0）",
-                size=12, color=C_SUB,
-            ),
+            content=ft.Text(msg, size=12, color=C_SUB),
             bgcolor=C_CARD, padding=10, border_radius=8,
         ))
 

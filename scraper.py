@@ -291,111 +291,157 @@ def get_before_info(venue_code: str, race_no: int, date_str: str) -> list[dict]:
     return sorted(before_info, key=lambda x: x["boat_no"])
 
 
+# ── オッズ ──────────────────────────────────────────────────────
+# boatrace.jp のオッズページの作り（2026-11-11 時点で確認）
+#   ・各オッズ表の直前に見出し <span class="title7_mainLabel">○○オッズ</span> がある
+#   ・オッズの値のセルには class="oddsPoint" が付く
+#   単勝（oddstf）  : 1行 =「艇番 | 選手名 | オッズ」
+#   2連単（odds2tf）: 横に1着の艇。各行は列ごとに「2着の艇 | オッズ」の組
+#                     （同じページの後ろに2連複の表もある）
+#   3連単（odds3t） : 2連単の形に、2着の艇のセル（rowspan で4行分）が加わる
+#                     列ごとに「[2着の艇] | 3着の艇 | オッズ」
+
+
+def _odds_table(soup: BeautifulSoup, label: str):
+    """見出し（例: '単勝オッズ'）の直後にある表を返す。見つからなければ None。"""
+    for span in soup.select("span.title7_mainLabel"):
+        if span.get_text(strip=True) == label:
+            return span.find_next("table")
+    return None
+
+
+def _to_odds(text: str) -> float | None:
+    """オッズの文字列を数値にする。'欠場'・'-'・0 以下は None。"""
+    try:
+        val = float(_norm(text).replace(",", ""))
+    except ValueError:
+        return None
+    return val if val > 0 else None
+
+
+def _header_boats(table) -> list[int]:
+    """表の見出し行から、1着の艇番を左から順に返す。"""
+    boats = []
+    for th in table.find_all("th"):
+        text = _norm(th.get_text(strip=True))
+        if text.isdigit() and 1 <= int(text) <= 6:
+            boats.append(int(text))
+    return boats
+
+
+def parse_odds_tf(soup: BeautifulSoup) -> dict[str, float]:
+    """単勝オッズのページから {"1": 1.8, ...} を返す。"""
+    table = _odds_table(soup, "単勝オッズ")
+    if table is None:
+        return {}
+    odds: dict[str, float] = {}
+    for tr in table.find_all("tr"):
+        tds = tr.find_all("td")
+        point = tr.select_one("td.oddsPoint")
+        if not tds or point is None:
+            continue
+        boat_text = _norm(tds[0].get_text(strip=True))
+        if not (boat_text.isdigit() and 1 <= int(boat_text) <= 6):
+            continue
+        val = _to_odds(point.get_text(strip=True))
+        if val is not None:
+            odds[boat_text] = val
+    return odds
+
+
+def _parse_odds_matrix(table, with_second: bool) -> dict[str, float]:
+    """
+    2連単・3連単の表を読む。
+    with_second=False（2連単）: 列ごとに「2着 | オッズ」
+    with_second=True （3連単）: 列ごとに「[2着（rowspan）] | 3着 | オッズ」
+    """
+    firsts = _header_boats(table)
+    if len(firsts) != 6:
+        return {}
+    seconds = [0] * 6  # 3連単用：列ごとの現在の2着艇
+    odds: dict[str, float] = {}
+    for tr in table.find_all("tr"):
+        cells = tr.find_all("td")
+        if not any("oddsPoint" in (c.get("class") or []) for c in cells):
+            continue  # 見出し行など
+        col = 0
+        i = 0
+        while i < len(cells) and col < 6:
+            if with_second and cells[i].get("rowspan"):
+                text = _norm(cells[i].get_text(strip=True))
+                seconds[col] = int(text) if text.isdigit() else 0
+                i += 1
+            if i + 1 >= len(cells):
+                break
+            boat_text = _norm(cells[i].get_text(strip=True))
+            val = _to_odds(cells[i + 1].get_text(strip=True))
+            i += 2
+            first = firsts[col]
+            second = seconds[col]
+            col += 1
+            if not boat_text.isdigit() or val is None:
+                continue
+            last = int(boat_text)
+            combo = (first, second, last) if with_second else (first, last)
+            if len(set(combo)) == len(combo) and all(1 <= b <= 6 for b in combo):
+                odds["-".join(map(str, combo))] = val
+    return odds
+
+
+def parse_odds_2t(soup: BeautifulSoup) -> dict[str, float]:
+    """2連単オッズのページから {"1-2": 5.1, ...} を返す（最大30通り）。"""
+    table = _odds_table(soup, "2連単オッズ")
+    return _parse_odds_matrix(table, with_second=False) if table else {}
+
+
+def parse_odds_3t(soup: BeautifulSoup) -> dict[str, float]:
+    """3連単オッズのページから {"1-2-3": 22.0, ...} を返す（最大120通り）。"""
+    table = _odds_table(soup, "3連単オッズ")
+    return _parse_odds_matrix(table, with_second=True) if table else {}
+
+
 def get_odds(venue_code: str, race_no: int, date_str: str) -> dict[str, float]:
     """
     単勝オッズを返す。{"1": 1.8, "2": 4.5, ...}
-    失敗時は空dictを返す。
+    失敗時・発売前は空dictを返す。
     """
     url = f"{BASE_URL}/owpc/pc/race/oddstf?rno={race_no}&jcd={venue_code}&hd={date_str}"
     soup = _fetch(url)
     if soup is None:
         return {}
-
-    odds: dict[str, float] = {}
-    for table in soup.find_all("table"):
-        for tr in table.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 2:
-                continue
-            try:
-                boat_text = _norm(tds[0].get_text(strip=True))
-                if not (boat_text.isdigit() and 1 <= int(boat_text) <= 6):
-                    continue
-                boat_no = int(boat_text)
-                # 単勝オッズは2列目（複勝は3列目）
-                odds_val = float(tds[1].get_text(strip=True))
-                if odds_val > 0:
-                    odds[str(boat_no)] = odds_val
-            except (ValueError, IndexError):
-                continue
-        if len(odds) >= 6:
-            break
-
+    odds = parse_odds_tf(soup)
+    if not odds:
+        print(f"[WARN] 単勝オッズ0件: {url}")
     return odds
 
 
 def get_odds_2f(venue_code: str, race_no: int, date_str: str) -> dict[str, float]:
     """
     2連単オッズを返す。{"1-2": 5.1, "1-3": 8.2, ...}
-    失敗・締め切り前は空dictを返す。
+    失敗時・発売前は空dictを返す。
     """
     url = f"{BASE_URL}/owpc/pc/race/odds2tf?rno={race_no}&jcd={venue_code}&hd={date_str}"
     soup = _fetch(url)
     if soup is None:
         return {}
-
-    odds: dict[str, float] = {}
-    for table in soup.find_all("table"):
-        for tr in table.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 2:
-                continue
-            try:
-                combo_text = _norm(tds[0].get_text(strip=True))
-                # "1-2" または "1=2" 形式
-                combo_text = re.sub(r"[=＝]", "-", combo_text)
-                if not re.match(r"^\d-\d$", combo_text):
-                    continue
-                a_str, b_str = combo_text.split("-")
-                a, b = int(a_str), int(b_str)
-                if not (1 <= a <= 6 and 1 <= b <= 6 and a != b):
-                    continue
-                odds_val = float(
-                    tds[-1].get_text(strip=True).replace(",", "")
-                )
-                if odds_val > 0:
-                    odds[f"{a}-{b}"] = odds_val
-            except (ValueError, IndexError):
-                continue
-
+    odds = parse_odds_2t(soup)
+    if not odds:
+        print(f"[WARN] 2連単オッズ0件: {url}")
     return odds
 
 
 def get_odds_3f(venue_code: str, race_no: int, date_str: str) -> dict[str, float]:
     """
     3連単オッズを返す。{"1-2-3": 22.0, ...}
-    失敗・締め切り前は空dictを返す。
+    失敗時・発売前は空dictを返す。
     """
-    url = f"{BASE_URL}/owpc/pc/race/odds3tf?rno={race_no}&jcd={venue_code}&hd={date_str}"
+    url = f"{BASE_URL}/owpc/pc/race/odds3t?rno={race_no}&jcd={venue_code}&hd={date_str}"
     soup = _fetch(url)
     if soup is None:
         return {}
-
-    odds: dict[str, float] = {}
-    for table in soup.find_all("table"):
-        for tr in table.find_all("tr"):
-            tds = tr.find_all("td")
-            if len(tds) < 2:
-                continue
-            try:
-                combo_text = _norm(tds[0].get_text(strip=True))
-                combo_text = re.sub(r"[=＝]", "-", combo_text)
-                if not re.match(r"^\d-\d-\d$", combo_text):
-                    continue
-                parts = combo_text.split("-")
-                a, b, c = int(parts[0]), int(parts[1]), int(parts[2])
-                if not (
-                    len({a, b, c}) == 3 and all(1 <= x <= 6 for x in (a, b, c))
-                ):
-                    continue
-                odds_val = float(
-                    tds[-1].get_text(strip=True).replace(",", "")
-                )
-                if odds_val > 0:
-                    odds[f"{a}-{b}-{c}"] = odds_val
-            except (ValueError, IndexError):
-                continue
-
+    odds = parse_odds_3t(soup)
+    if not odds:
+        print(f"[WARN] 3連単オッズ0件: {url}")
     return odds
 
 
