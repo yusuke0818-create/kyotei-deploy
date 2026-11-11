@@ -189,9 +189,9 @@ def build_result_screen(page: ft.Page, result: dict) -> None:
         bgcolor=C_CARD, padding=10, border_radius=8,
     ))
 
-    # 期待値の参考計算（旧「おすすめ舟券」）
-    # 販売時の注意事項（統計的な参考情報・的中保証なし）に合わせた表示にしている
-    controls.append(_label("期待値の参考計算"))
+    # おすすめ舟券（期待値 > 1.0 の舟券）
+    # 注意書きは販売時の注意事項（統計的な参考情報・的中保証なし）に合わせている
+    controls.append(_label("おすすめ舟券"))
     recs = result.get("recommendations", [])
     note = ft.Text(
         "予測確率 × 取得時点のオッズで計算した、期待値が1.0を超える舟券です。"
@@ -439,7 +439,7 @@ def build_top_screen(page: ft.Page) -> None:
                 color=C_TITLE, weight=ft.FontWeight.BOLD,
             ),
             ft.Row([
-                ft.Text("v2.0", size=11, color=C_SUB),
+                ft.Text("v2.1", size=11, color=C_SUB),
                 ft.IconButton(
                     icon=ft.icons.Icons.SETTINGS,
                     icon_color=C_SUB,
