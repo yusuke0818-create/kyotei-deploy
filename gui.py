@@ -1,6 +1,6 @@
 # 目的：競艇舟券予想ツールのFlet UI（スマホ優先Web版）
 # 作成日：2026-05-19
-# 対象OS：Linux（Render Web）/ Windows
+# 対象OS：Linux（Render Web）/ macOS
 # 依存ライブラリ：flet
 
 import json

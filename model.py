@@ -1,6 +1,6 @@
 # 目的：XGBoostモデルの学習・保存・予測・的中率計算
 # 作成日：2026-05-19
-# 対象OS：Linux（GitHub Actions）/ Windows
+# 対象OS：Linux（GitHub Actions）/ macOS
 # 依存ライブラリ：xgboost, scikit-learn, pandas, joblib
 
 import os
@@ -15,7 +15,7 @@ from xgboost import XGBClassifier
 MODEL_PATH = "data/model.pkl"
 MERGED_CSV = "data/merged_data.csv"
 
-# 19特徴量
+# 20特徴量
 # boat_noはone-hot化（コース位置ごとに独立した重みを学習するため）
 # venue_codeを追加（会場ごとにインコース有利度が異なるため）
 # XGBoostはNaNをネイティブで処理するため欠損値補完は不要

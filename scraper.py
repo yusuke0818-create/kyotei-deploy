@@ -1,6 +1,6 @@
 # 目的：boatrace.jp から当日レースデータをスクレイピングする
 # 作成日：2026-05-19
-# 対象OS：Linux（Render）/ Windows
+# 対象OS：Linux（Render）/ macOS
 # 依存ライブラリ：requests, beautifulsoup4
 
 import re

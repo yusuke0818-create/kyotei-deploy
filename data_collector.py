@@ -16,10 +16,16 @@ from constants import GRADE_MAP, NIGHT_VENUES
 OPEN_API_URL = "https://boatraceopenapi.github.io/results/v2/{year}/{date_str}.json"
 ENTRY_URL = "https://www.boatrace.jp/owpc/pc/race/racelist?rno={race_no}&jcd={venue_code}&hd={date_str}"
 BEFORE_URL = "https://www.boatrace.jp/owpc/pc/race/beforeinfo?rno={race_no}&jcd={venue_code}&hd={date_str}"
+RESULT_URL = "https://www.boatrace.jp/owpc/pc/race/raceresult?rno={race_no}&jcd={venue_code}&hd={date_str}"
+INDEX_URL = "https://www.boatrace.jp/owpc/pc/race/index?hd={date_str}"
 HEADERS = {"User-Agent": "kyotei-yosou-tool/1.0 (contact: yusuke0818@gmail.com)"}
 
 TRAINING_CSV = "data/training_data.csv"
 STATE_FILE = "data/collection_state.json"
+FALLBACK_CSV = "data/fallback_data.csv"
+FALLBACK_STATE_FILE = "data/fallback_state.json"
+FALLBACK_BOUNDARY = date(2025, 7, 14)
+FALLBACK_OLDEST = date(2016, 1, 1)
 ROLLING_DAYS = 730
 MAX_CONCURRENCY = 10
 SLEEP_SEC = 0.5
@@ -235,11 +241,127 @@ async def _fetch_before(
     return venue_code, race_no, _parse_before_info(html)
 
 
-async def collect_one_day(
+def _parse_result_page(html: str) -> dict[int, int]:
+    """raceresultページから {boat_no: rank} のdictを返す。"""
+    soup = BeautifulSoup(html, "html.parser")
+    ranks: dict[int, int] = {}
+    for tr in soup.find_all("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 2:
+            continue
+        rank_text = _norm(tds[0].get_text(strip=True))
+        boat_text = _norm(tds[1].get_text(strip=True))
+        if rank_text.isdigit() and boat_text.isdigit():
+            rank = int(rank_text)
+            boat_no = int(boat_text)
+            if 1 <= rank <= 6 and 1 <= boat_no <= 6:
+                ranks[boat_no] = rank
+    return ranks
+
+
+async def _fetch_result_page(
+    session: aiohttp.ClientSession,
+    venue_code: str,
+    race_no: int,
+    date_str: str,
+    semaphore: asyncio.Semaphore,
+) -> tuple[str, int, dict[int, int]]:
+    url = RESULT_URL.format(race_no=race_no, venue_code=venue_code, date_str=date_str)
+    html = await _fetch_html(session, url, semaphore)
+    if html is None:
+        return venue_code, race_no, {}
+    return venue_code, race_no, _parse_result_page(html)
+
+
+async def _fetch_venue_codes(
+    session: aiohttp.ClientSession,
+    date_str: str,
+    semaphore: asyncio.Semaphore,
+) -> list[str]:
+    """indexページから開催会場コード（2桁）のリストを返す。"""
+    url = INDEX_URL.format(date_str=date_str)
+    html = await _fetch_html(session, url, semaphore)
+    if not html:
+        return []
+    return list(set(re.findall(r"raceindex\?jcd=(\d{2})", html)))
+
+
+async def _collect_one_day_fallback(
     target_date: date,
     session: aiohttp.ClientSession,
     semaphore: asyncio.Semaphore,
 ) -> list[dict]:
+    """Open API対象外（2025-07-14以前）用フォールバック収集。
+    公式サイトのraceresult・出走表・直前情報ページからデータを取得する。
+    """
+    date_str = target_date.strftime("%Y%m%d")
+
+    venue_codes = await _fetch_venue_codes(session, date_str, semaphore)
+    if not venue_codes:
+        return []
+
+    race_keys = [(vc, rn) for vc in sorted(venue_codes) for rn in range(1, 13)]
+
+    result_tasks = [_fetch_result_page(session, vc, rn, date_str, semaphore) for vc, rn in race_keys]
+    entry_tasks = [_fetch_entry(session, vc, rn, date_str, semaphore) for vc, rn in race_keys]
+    before_tasks = [_fetch_before(session, vc, rn, date_str, semaphore) for vc, rn in race_keys]
+
+    result_results, entry_results, before_results = await asyncio.gather(
+        asyncio.gather(*result_tasks),
+        asyncio.gather(*entry_tasks),
+        asyncio.gather(*before_tasks),
+    )
+
+    ranks_map: dict[tuple, dict[int, int]] = {(vc, rn): r for vc, rn, r in result_results}
+    entries_map: dict[tuple, dict[int, dict]] = {(vc, rn): ent for vc, rn, ent in entry_results}
+    before_map: dict[tuple, dict[int, dict]] = {(vc, rn): bi for vc, rn, bi in before_results}
+
+    records = []
+    for vc, rn in race_keys:
+        ranks = ranks_map.get((vc, rn), {})
+        if not ranks:
+            continue
+        entries = entries_map.get((vc, rn), {})
+        before = before_map.get((vc, rn), {})
+        is_night = _is_night_race(vc, rn)
+
+        for boat_no, rank in ranks.items():
+            entry = entries.get(boat_no, {})
+            bi = before.get(boat_no, {})
+            records.append({
+                "date": date_str,
+                "venue_code": vc,
+                "race_no": rn,
+                "boat_no": boat_no,
+                "racer_grade_num": GRADE_MAP.get(entry.get("racer_grade", "B2"), 1),
+                "win_rate": entry.get("win_rate"),
+                "local_win_rate": entry.get("local_win_rate"),
+                "national_2rate": entry.get("national_2rate"),
+                "local_2rate": entry.get("local_2rate"),
+                "st_avg": entry.get("st_avg"),
+                "fly_count": entry.get("fly_count", 0),
+                "motor_rate": entry.get("motor_rate"),
+                "exhibition_time": bi.get("exhibition_time"),
+                "exhibition_st": bi.get("exhibition_st"),
+                "tilt": bi.get("tilt"),
+                "is_night": is_night,
+                "wind_speed": None,
+                "rank": rank,
+                "is_first": 1 if rank == 1 else 0,
+            })
+
+    return records
+
+
+async def collect_one_day(
+    target_date: date,
+    session: aiohttp.ClientSession,
+    semaphore: asyncio.Semaphore,
+    use_fallback: bool = False,
+) -> list[dict]:
+    if use_fallback:
+        return await _collect_one_day_fallback(target_date, session, semaphore)
+
     date_str = target_date.strftime("%Y%m%d")
 
     # 1. Open API でその日の全レース結果を取得（1リクエスト）
@@ -310,29 +432,43 @@ async def collect_one_day(
 
 def _load_state(state_file: str) -> dict:
     if os.path.exists(state_file):
-        with open(state_file) as f:
+        with open(state_file, encoding="utf-8") as f:
             return json.load(f)
-    return {"forward_max": None, "reverse_min": None}
+    return {"forward_max": None, "reverse_min": None, "fallback_min": None}
 
 
 def _save_state(state: dict, state_file: str) -> None:
     os.makedirs("data", exist_ok=True)
-    with open(state_file, "w") as f:
+    with open(state_file, "w", encoding="utf-8") as f:
         json.dump(state, f)
 
 
 def collect_incremental(
     days: int = 14,
     reverse: bool = False,
+    fallback: bool = False,
     output_csv: str = TRAINING_CSV,
     state_file: str = STATE_FILE,
 ) -> int:
     os.makedirs("data", exist_ok=True)
     today = date.today()
-    oldest = date(today.year - 5, today.month, today.day)
     state = _load_state(state_file)
 
-    if reverse:
+    if fallback:
+        # フォールバックモード: FALLBACK_BOUNDARYから過去へ向かって収集
+        end_date = (
+            datetime.strptime(state["fallback_min"], "%Y%m%d").date() - timedelta(days=1)
+            if state.get("fallback_min")
+            else FALLBACK_BOUNDARY
+        )
+        start_date = max(end_date - timedelta(days=days - 1), FALLBACK_OLDEST)
+        if start_date > end_date:
+            print("フォールバック収集完了済み")
+            return 0
+        date_range = [end_date - timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+        use_fallback = True
+    elif reverse:
+        oldest = date(today.year - 5, today.month, today.day)
         if state["reverse_min"]:
             cur_min = datetime.strptime(state["reverse_min"], "%Y%m%d").date()
             end_date = cur_min - timedelta(days=1)
@@ -343,11 +479,10 @@ def collect_incremental(
             print(f"収集対象なし(reverse_min: {state['reverse_min']})")
             return 0
         # 新しい順に処理: 途中停止しても次回は停止日の翌日から再開できる
-        date_range = [
-            end_date - timedelta(days=i)
-            for i in range((end_date - start_date).days + 1)
-        ]
+        date_range = [end_date - timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+        use_fallback = False
     else:
+        oldest = date(today.year - 5, today.month, today.day)
         if state["forward_max"]:
             cur_max = datetime.strptime(state["forward_max"], "%Y%m%d").date()
             start_date = cur_max + timedelta(days=1)
@@ -357,10 +492,8 @@ def collect_incremental(
         if start_date > end_date:
             print(f"収集対象なし(forward_max: {state['forward_max']})")
             return 0
-        date_range = [
-            start_date + timedelta(days=i)
-            for i in range((end_date - start_date).days + 1)
-        ]
+        date_range = [start_date + timedelta(days=i) for i in range((end_date - start_date).days + 1)]
+        use_fallback = False
 
     print(f"収集範囲: {date_range[-1]} 〜 {date_range[0]}({len(date_range)}日間)")
 
@@ -372,7 +505,7 @@ def collect_incremental(
         async with aiohttp.ClientSession() as session:
             for current in date_range:
                 print(f"  収集中: {current.strftime('%Y-%m-%d')}")
-                records = await collect_one_day(current, session, semaphore)
+                records = await collect_one_day(current, session, semaphore, use_fallback=use_fallback)
 
                 if records:
                     df_day = pd.DataFrame(records)
@@ -383,7 +516,9 @@ def collect_incremental(
                     total_records += len(records)
 
                 # 1日ごとにstate保存（途中停止→次回から正しく再開）
-                if reverse:
+                if fallback:
+                    state["fallback_min"] = current.strftime("%Y%m%d")
+                elif reverse:
                     state["reverse_min"] = current.strftime("%Y%m%d")
                 else:
                     state["forward_max"] = current.strftime("%Y%m%d")
@@ -395,16 +530,18 @@ def collect_incremental(
         print("収集レコードなし")
         return 0
 
-    # ローリングウィンドウ: 2年超のデータ削除 + 重複除去
-    cutoff = (today - timedelta(days=ROLLING_DAYS)).strftime("%Y%m%d")
     df_all = pd.read_csv(output_csv)
-    before = len(df_all)
-    df_all = df_all[df_all["date"].astype(str) >= cutoff]
+    before_count = len(df_all)
     df_all = df_all.drop_duplicates(subset=["date", "venue_code", "race_no", "boat_no"])
-    df_all.to_csv(output_csv, index=False)
-    removed = before - len(df_all)
 
-    print(f"追記: {total_records}件  削除(2年超): {removed}件  合計: {len(df_all)}件")
+    if not fallback:
+        # ローリングウィンドウ: 2年超のデータ削除（通常モードのみ）
+        cutoff = (today - timedelta(days=ROLLING_DAYS)).strftime("%Y%m%d")
+        df_all = df_all[df_all["date"].astype(str) >= cutoff]
+
+    df_all.to_csv(output_csv, index=False)
+    removed = before_count - len(df_all)
+    print(f"追記: {total_records}件  削除(重複/2年超): {removed}件  合計: {len(df_all)}件")
     return total_records
 
 
@@ -412,7 +549,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--days", type=int, default=14)
     parser.add_argument("--reverse", action="store_true")
+    parser.add_argument("--fallback", action="store_true")
     parser.add_argument("--output", type=str, default=TRAINING_CSV)
     parser.add_argument("--state", type=str, default=STATE_FILE)
     args = parser.parse_args()
-    collect_incremental(days=args.days, reverse=args.reverse, output_csv=args.output, state_file=args.state)
+
+    if args.fallback:
+        output = args.output if args.output != TRAINING_CSV else FALLBACK_CSV
+        state = args.state if args.state != STATE_FILE else FALLBACK_STATE_FILE
+    else:
+        output = args.output
+        state = args.state
+
+    collect_incremental(
+        days=args.days,
+        reverse=args.reverse,
+        fallback=args.fallback,
+        output_csv=output,
+        state_file=state,
+    )

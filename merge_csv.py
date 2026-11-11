@@ -1,6 +1,6 @@
 # 目的：複数の収集CSVをマージ・重複除去してmerged_data.csvを生成する
 # 作成日：2026-05-23
-# 対象OS：Windows / Linux
+# 対象OS：macOS / Linux
 # 依存ライブラリ：pandas
 
 import os

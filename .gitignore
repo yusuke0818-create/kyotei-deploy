@@ -11,3 +11,6 @@ data/fallback_data.csv
 data/fallback_data_snapshot.csv
 data/training_data.csv
 data/reverse_data.csv
+
+# Python 仮想環境（Mac）
+.venv/

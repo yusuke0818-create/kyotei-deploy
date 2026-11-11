@@ -1,6 +1,6 @@
 # 目的：スクレイピングデータとMLモデルを統合して予測結果を生成する
 # 作成日：2026-05-19
-# 対象OS：Linux（Render）/ Windows
+# 対象OS：Linux（Render）/ macOS
 # 依存ライブラリ：pandas, numpy
 
 import numpy as np

@@ -7,3 +7,5 @@ numpy==2.4.4
 xgboost==3.2.0
 scikit-learn==1.8.0
 joblib==1.5.3
+# flet-web 0.85.1 は fastapi 0.145.0 以降で起動しない（openapi_prefix 廃止）ため固定
+fastapi==0.144.0
